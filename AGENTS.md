@@ -38,7 +38,7 @@ cmd/inget-fetch/      fetch entrypoint
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
 internal/config/      loading, precedence, validation, secret indirection, hashing [implemented]
-internal/artifact/    envelope schema, manifest, shards, blob store
+internal/artifact/    envelope schema, manifest, shards, blob store [implemented]
 internal/source/      connector registry (github/, monday/)
 internal/delta/       reconciliation, hashing, signatures, glob scoping
 internal/state/       StateStore interface, postgres, sqlite
@@ -118,5 +118,24 @@ require touching the pipeline.
   config change and re-fetch everything. `Config` also implements `String` on purpose —
   `fmt` reads unexported fields with `%+v`, which would otherwise print the resolved
   secret snapshot.
+- **Commit ordering (`internal/artifact/writer.go`).** Blobs, then shards, then
+  `manifest.json`, then `_COMMIT`. Writing the marker any earlier makes a crashed fetch
+  look like a complete run, and a consumer would then issue tombstones for items the
+  producer never reached. `Commit` validates the manifest before writing it, so a producer
+  bug fails at the boundary rather than in every future read.
+- **fileblob URL parameters (`internal/artifact/store.go`).** `file://` stores get
+  `metadata=skip`, `create_dir=true` and `no_tmp_dir=true`. Dropping `metadata=skip` makes
+  the driver write a `.attrs` sidecar per object, which doubles the object count and puts
+  non-run entries into the listings `ListRuns` walks. Dropping `no_tmp_dir` reintroduces
+  cross-device rename failures when `TMPDIR` is on another mount.
+- **Run identifiers are canonical uppercase ULIDs.** `latest` resolves by lexical
+  comparison, so `ParseRunID` rejects the lowercase encoding that Crockford base32 would
+  otherwise accept: a lowercase directory name sorts after every canonical one and would
+  masquerade as the newest run.
+- **Backend registration weight (`internal/artifact/drivers.go`).** Linking all three
+  gocloud drivers costs about 27 MB of stripped binary (12 MB with `fileblob` alone,
+  21 MB adding `s3blob`, 39 MB with `gcsblob` as well). That is the price of one code path
+  for three schemes; if a release needs to be small, drop an import there and accept that
+  the matching URL scheme fails at open time.
 - **Cost.** `inget plan` exists so no run spends money unexpectedly. Any change that can
   increase LLM calls must be visible there first.

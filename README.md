@@ -13,9 +13,11 @@ index you can search in plain language, without re-paying for work that has not 
 Because the two are separate, a fetch failure never wastes model spend, and you can
 iterate on prompts against artifacts you already have — no re-fetching, no rate limits.
 
-> **Status: under construction.** Steps 1–2 of 14 in `docs/implementation-plan.md` are
-> complete: the binaries build, report their version, and load a validated layered
-> configuration. Fetching and enrichment are not implemented yet.
+> **Status: under construction.** Steps 1–3 of 14 in `docs/implementation-plan.md` are
+> complete: the binaries build, report their version, load a validated layered
+> configuration, and the artifact envelope — content-addressed blob store, JSONL record
+> shards, manifests, the `_COMMIT` protocol — round-trips. No command writes or reads a
+> run yet; fetching and enrichment are not implemented.
 
 ## Install
 
@@ -116,7 +118,9 @@ stale data.
 
 **Artifacts are immutable and content-addressed.** A fetch writes blobs and shards, then
 an atomic `_COMMIT` marker; a run without that marker is invisible to readers. This makes
-the blob store a replay log and an audit trail, and makes prompt iteration free.
+the blob store a replay log and an audit trail, and makes prompt iteration free. The store
+is one URL — `file://`, `s3://` or `gs://` — so moving from a laptop to object storage is
+a configuration change.
 
 Steps 1–8 of the plan need no network access and no credentials, so most development runs
 entirely offline against fakes.

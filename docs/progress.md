@@ -19,7 +19,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 |---|---|---|
 | 1 | Project skeleton | **done** |
 | 2 | Configuration | **done** |
-| 3 | Artifact envelope and blob store | not started |
+| 3 | Artifact envelope and blob store | **done** |
 | 4 | State store | not started |
 | 5 | Delta engine | not started |
 | 6 | Model clients | not started |
@@ -164,6 +164,76 @@ Known limitation, asserted by a test rather than worked around: list elements ar
 env-overridable (`INGET_SOURCES__0__NAME` does nothing), and overriding a list through
 `config.local.yaml` replaces the element rather than merging into it.
 
+## Step 3 record
+
+Implemented: `internal/artifact`, a round-trippable implementation of
+`docs/artifact-envelope.md` schema_version 1. `Manifest`, `Shard`, `Counts`, `Record` and
+`Fragment` with the documented JSON tags; the consumer obligations as `Manifest.Validate`
+and `Record.Validate`; the key layout including datatype flattening (`github/repo` →
+`github_repo`); monotonic ULID run IDs; a content-addressed blob store over
+`gocloud.dev/blob` with `file://`, `s3://` and `gs://` registered; zstd framing shared by
+blobs and shards; a shard writer that rolls at `shard_target_bytes` uncompressed and
+reports per-shard compressed size and SHA-256; the commit protocol with `_COMMIT` last;
+and a reader that resolves `latest`, rejects unknown `schema_version`, verifies shard
+digests, and streams records.
+
+Files: `schema.go` (types), `validate.go` (obligations), `path.go` (keys, digest and shard
+path checks), `runid.go`, `codec.go` (zstd, magic sniffing), `store.go` (options, open,
+blob get/put/has), `shard.go` (streaming shard writer), `writer.go` (run writer and
+commit), `reader.go` (run resolution and record streaming), `config.go` (the one bridge to
+`internal/config`), `drivers.go` (backend registration).
+
+Pinned: `gocloud.dev` v0.46.0, `github.com/klauspost/compress` v1.19.1,
+`github.com/oklog/ulid/v2` v2.1.2. All pure Go: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64`
+cross-compiles both binaries.
+
+Verified: `make build test lint` green, `golangci-lint run` 0 issues, `go mod tidy` a
+no-op. The acceptance tests assert 10k records across 61 shards read back identically and
+in order; a run whose `_COMMIT` was removed is skipped by `LatestRun`, `ListRuns` and
+`OpenRun` even though it sorts newest; an overwritten shard fails the read before any
+record is delivered; a second `PutBlob` of the same content writes nothing and leaves the
+object's mtime untouched; `schema_version` 99 is refused in both the manifest and a record.
+
+Decisions made where the specification left room:
+
+- **Shard verification is per shard, not per run.** The spec says to verify before
+  parsing; the reader reads a compressed shard into memory, hashes it, and only then
+  decodes. Verifying every shard of a run before delivering the first record would mean
+  transferring the whole run twice. Records from earlier shards can therefore reach the
+  consumer before a later shard is found corrupt, which the per-item transactional
+  checkpointing of step 8 already tolerates.
+- **`GetBlob` verifies the digest it was asked for.** The envelope only mandates shard
+  verification. Blobs are capped at `blob_max_bytes`, so hashing on read is cheap, and it
+  turns silent corruption into a failed run instead of a poisoned embedding.
+- **Blob decoding sniffs the zstd magic number** rather than trusting
+  `artifacts.compression`. A content-addressed store is long-lived and may hold blobs
+  written under either setting. The digest check is what makes the sniff safe: raw content
+  that happens to start with the magic bytes fails to decode as a frame, falls back to raw,
+  and still verifies. Shards are unambiguous — the manifest records each file name and the
+  extension names the codec — so `compression: none` produces `records-00000.jsonl`.
+- **The writer stamps and normalizes.** `schema_version`, `datatype` and, when unset,
+  `fragment_count` come from the run; nil `fragments` and `metadata` become `[]` and `{}`.
+  A record whose datatype disagrees with the run is rejected rather than rewritten, because
+  a shard that contradicts its manifest is unfixable after the fact.
+- **`Counts` is split.** The writer fills in what it observes (`items`, `fragments`); the
+  producer supplies through `CommitInfo` what only it knows — items skipped as unchanged,
+  blobs written and reused, tombstones, truncation, warnings.
+- **`Writer` is mutex-guarded** so the step 9 worker pool can write items as it finishes
+  them, and refuses writes after commit.
+- **`ErrBlobTooLarge` is a sentinel, not a failure.** Content over the cap writes nothing
+  and returns a distinguishable error; the producer's response is to record the fragment as
+  truncated with no blob.
+
+Known limitations, deliberate:
+
+- No garbage collection, no `Delete`, no listing of blobs. That is step 13, which owns the
+  three-phase collection the envelope specifies.
+- Nothing links `internal/artifact` yet, so the shipped binaries are still 7.8 MB. The
+  first command that reads or writes a run pays the backend registration cost measured in
+  AGENTS.md's hazards (about 39 MB stripped with all three drivers).
+- No CLI command was added. Step 3's actions do not call for one, and `inget-fetch` is the
+  first legitimate caller.
+
 ## Library decisions (approved, folded into D15)
 
 Approved 2026-08-01 and written into `feature-design.md` D15 and the corresponding plan
@@ -178,7 +248,8 @@ steps, so no session needs to re-derive them.
 
 Pin these when the step that needs them lands, not before, so `go.mod` stays honest about
 what is actually used. `doublestar` is already pinned: step 2 validates dependency globs
-with the same matcher step 5 will match with.
+with the same matcher step 5 will match with. `oklog/ulid/v2` landed with step 3, alongside
+`gocloud.dev` v0.46.0 and `klauspost/compress` v1.19.1, which D15 had already selected.
 
 Deliberately kept in-tree:
 
