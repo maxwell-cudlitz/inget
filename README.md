@@ -13,9 +13,9 @@ index you can search in plain language, without re-paying for work that has not 
 Because the two are separate, a fetch failure never wastes model spend, and you can
 iterate on prompts against artifacts you already have — no re-fetching, no rate limits.
 
-> **Status: under construction.** Step 1 of 14 in `docs/implementation-plan.md` is
-> complete: the binaries build and report their version. Fetching and enrichment are not
-> implemented yet.
+> **Status: under construction.** Steps 1–2 of 14 in `docs/implementation-plan.md` are
+> complete: the binaries build, report their version, and load a validated layered
+> configuration. Fetching and enrichment are not implemented yet.
 
 ## Install
 
@@ -36,6 +36,7 @@ remaining implementation steps. Today:
 ```bash
 inget version
 inget --help
+inget --config /etc/inget/config.yaml --help
 ```
 
 The shape it is building toward:
@@ -52,6 +53,10 @@ calls and the estimated cost before spending anything.
 
 ## Configuration
 
+Both binaries read one `config.yaml`. Point them elsewhere with `--config PATH` or
+`INGET_CONFIG`; the `config.local.yaml` override is looked for beside whichever file you
+name.
+
 Configuration is layered, highest precedence first:
 
 1. `INGET_*` environment variables, with `__` for nesting
@@ -59,8 +64,21 @@ Configuration is layered, highest precedence first:
 2. `config.local.yaml` — your gitignored overrides
 3. `config.yaml` — the committed base
 
+Three things are worth knowing before you edit it:
+
+- **Lists are not env-addressable.** Scalars are overridable by environment variable, but
+  `sources`, `destinations` and `datatypes` are lists, and there is no sane syntax for
+  addressing a list element. Override those through `config.local.yaml`, which replaces
+  the whole list entry it names.
+- **Unknown keys are errors.** A misspelled key fails the load instead of silently doing
+  nothing, and validation reports every problem at once — required fields, unknown source
+  or destination names, out-of-range values, and invalid dependency globs.
+- **Durations accept days.** `30d`, `1d12h` and `120s` all work.
+
 Secrets never appear in config files. Config names the environment variable that holds a
-secret (`token_env: INGET_GITHUB_TOKEN`) and the process reads it at startup.
+secret (`token_env: INGET_GITHUB_TOKEN`) and the process reads it at startup. A variable
+that is unset is only an error when something actually needs it, so a GitHub-only run
+does not require the Monday token.
 
 Logging is controlled independently of the config file so you can raise verbosity
 anywhere:

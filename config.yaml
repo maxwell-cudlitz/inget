@@ -1,0 +1,179 @@
+# Base configuration for both binaries. Precedence, highest wins:
+#   environment variables -> config.local.yaml -> config.yaml
+#
+# Environment nesting uses double underscores after the INGET_ prefix:
+#   INGET_MODELS__GENERATOR__MODEL sets models.generator.model
+#
+# Scalar settings are env-overridable. List-valued settings (sources, destinations,
+# datatypes) are not addressable by environment variable — override those through
+# config.local.yaml. See docs/feature-design.md, "Configuration".
+#
+# Secrets never appear here. Config names the environment variable that holds a secret
+# (`*_env`) and the process reads it at startup.
+
+version: 1
+
+log:
+  level: info          # LOG_LEVEL: debug|info|warn|error
+  format: json         # LOG_FORMAT: json|text
+  destination: stderr  # LOG_DESTINATION: stderr|stdout
+
+artifacts:
+  url: "file://./.inget/artifacts"     # or s3://bucket/prefix, gs://bucket/prefix
+  shard_target_bytes: 134217728        # 128 MiB uncompressed per JSONL shard
+  blob_max_bytes: 1048576              # per-fragment content cap
+  max_fragments_per_item: 2000         # excess is dropped, recorded, and warned
+  compression: zstd
+
+retention:
+  runs: 30d                            # run directories kept before gc
+  missing_runs: 3                      # runs a fragment may be absent before its
+                                       # derivations are collected
+
+enrich:
+  max_reference_depth: 2               # reference resolution depth bound
+  max_cascade_per_run: 5000            # cascaded invalidations; remainder deferred
+
+state:
+  driver: postgres                     # postgres | sqlite
+  dsn_env: INGET_STATE_DSN
+  # path: ./.inget/state.db            # sqlite only
+
+models:
+  generator:
+    driver: openai
+    base_url: "http://localhost:4000/v1"
+    model: "deepseek-v4-flash"
+    api_key_env: INGET_GENERATOR_API_KEY
+    temperature: 0
+    seed: 1
+    max_output_tokens: 1024
+    max_input_chars: 120000
+    concurrency: 8
+    timeout: 120s
+    price_per_mtok_in: 0.14            # for `inget plan` cost estimates
+    price_per_mtok_out: 0.28
+  embedder:
+    driver: openai
+    base_url: "http://localhost:8080/v1"
+    model: "Qwen/Qwen3-Embedding-0.6B"
+    dimensions: 1024
+    truncate_dims: 0                   # MRL target; 0 = native
+    batch_size: 64
+    concurrency: 4
+    timeout: 60s
+
+destinations:
+  - name: local-pgvector
+    driver: pgvector
+    dsn_env: INGET_PGVECTOR_DSN
+    table: inget_vectors
+    storage: halfvec                   # halfvec | vector
+    hnsw: { m: 24, ef_construction: 200 }
+    ef_search: 100
+    granularity: item                  # item | fragment
+    batch_size: 500
+
+sources:
+  - name: github
+    driver: github
+    auth:
+      token_env: INGET_GITHUB_TOKEN
+      api_url: "https://api.github.com"
+    domain:
+      orgs: ["maxwellcudlitz"]
+      repos: []
+      topics: []
+      visibility: all                  # all | public | private
+      include_archived: false
+      include_forks: false
+      max_inactive_days: 365
+    limits:
+      requests_per_second: 10
+      max_concurrent: 4
+      tarball_max_bytes: 33554432
+
+  - name: monday
+    driver: monday
+    auth:
+      token_env: INGET_MONDAY_TOKEN
+      api_url: "https://api.monday.com/v2"
+      api_version: "2026-07"
+    domain:
+      workspaces: []
+      boards: [1234567890]
+      include_updates: true
+      include_subitems: false
+    limits:
+      complexity_reserve: 250000       # keep this much budget in hand
+      max_concurrent: 8
+      page_size: 500
+
+datatypes:
+  - name: github/repo
+    source: github
+    enricher: llm
+    fragment_enricher:
+      enabled: true
+      prompt: prompts/github/repo/fragment.tmpl
+      max_input_chars: 8000
+    compose:
+      order: tier                      # tier | path
+      max_chars: 120000
+    drift_threshold: 0.02
+    destinations: [local-pgvector]
+    views:
+      - name: role
+        prompt: prompts/github/repo/role.tmpl
+        depends_on: ["**"]
+      - name: surface
+        prompt: prompts/github/repo/surface.tmpl
+        depends_on: ["cmd/**", "**/api/**", "**/routes/**", "**/handlers/**",
+                     "*.proto", "**/*.graphql", "openapi*", "swagger*",
+                     "**/main.*", "**/index.*", "README*"]
+      - name: internals
+        prompt: prompts/github/repo/internals.tmpl
+        depends_on: ["**"]
+      - name: stack
+        prompt: prompts/github/repo/stack.tmpl
+        depends_on: ["go.mod", "go.sum", "package.json", "pyproject.toml",
+                     "requirements.txt", "Cargo.toml", "pom.xml", "build.gradle*",
+                     "*.tf", "Dockerfile*", "docker-compose*", "Makefile"]
+      - name: integrations
+        prompt: prompts/github/repo/integrations.tmpl
+        depends_on: ["*.tf", "helm/**", "charts/**", "k8s/**",
+                     ".github/workflows/**", "**/client*", "**/config*"]
+      - name: stewardship
+        prompt: prompts/github/repo/stewardship.tmpl
+        depends_on: ["CODEOWNERS", ".github/**", "docs/**", "README*", "AGENTS.md"]
+      - name: operations
+        prompt: prompts/github/repo/operations.tmpl
+        depends_on: ["Dockerfile*", "docker-compose*", "Makefile", "helm/**",
+                     "k8s/**", ".github/workflows/**", "config*", "deploy/**"]
+      - name: aliases
+        prompt: prompts/github/repo/aliases.tmpl
+        depends_on: ["**"]
+
+  - name: monday/item
+    source: monday
+    enricher: llm
+    fragment_enricher:
+      enabled: false                   # columns are already short; no per-column LLM
+    drift_threshold: 0.02
+    destinations: [local-pgvector]
+    references:
+      - name: linked_repo
+        resolver: inget
+        datatype: github/repo
+        key_from: "column:repo_url"
+        fields: [description, "view:role"]
+        inject_as: fragment
+    metadata_fields:
+      related_keys: "${references.*.resolved_keys}"
+    views:
+      - name: substance
+        prompt: prompts/monday/item/substance.tmpl
+        depends_on: ["**"]
+      - name: progress
+        prompt: prompts/monday/item/progress.tmpl
+        depends_on: ["column:status", "column:date*", "column:person*", "update:*"]

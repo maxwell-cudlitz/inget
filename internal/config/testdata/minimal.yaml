@@ -1,0 +1,94 @@
+# Minimal valid configuration used by the config package tests. Values are deliberately
+# small and distinct from the shipped config.yaml so a test can tell them apart.
+version: 1
+
+log:
+  level: info
+  format: json
+  destination: stderr
+
+artifacts:
+  url: "file://./.inget/artifacts"
+  shard_target_bytes: 1024
+  blob_max_bytes: 512
+  max_fragments_per_item: 10
+  compression: zstd
+
+retention:
+  runs: 7d
+  missing_runs: 2
+
+enrich:
+  max_reference_depth: 1
+  max_cascade_per_run: 100
+
+state:
+  driver: sqlite
+  path: ./.inget/state.db
+
+models:
+  generator:
+    driver: openai
+    base_url: "http://localhost:4000/v1"
+    model: gen-1
+    api_key_env: INGET_TEST_GENERATOR_KEY
+    temperature: 0
+    seed: 1
+    max_output_tokens: 128
+    max_input_chars: 4096
+    concurrency: 2
+    timeout: 30s
+    price_per_mtok_in: 0.1
+    price_per_mtok_out: 0.2
+  embedder:
+    driver: openai
+    base_url: "http://localhost:8080/v1"
+    model: embed-1
+    dimensions: 8
+    truncate_dims: 0
+    batch_size: 4
+    concurrency: 1
+    timeout: 10s
+
+destinations:
+  - name: vectors
+    driver: pgvector
+    dsn_env: INGET_TEST_DSN
+    table: inget_vectors
+    storage: halfvec
+    hnsw: { m: 16, ef_construction: 64 }
+    ef_search: 40
+    granularity: item
+    batch_size: 10
+
+sources:
+  - name: git
+    driver: github
+    auth:
+      token_env: INGET_TEST_TOKEN
+      api_url: "https://api.github.com"
+    domain:
+      orgs: ["acme"]
+      include_forks: false
+      max_inactive_days: 30
+    limits:
+      requests_per_second: 5
+      max_concurrent: 2
+
+datatypes:
+  - name: git/repo
+    source: git
+    enricher: llm
+    fragment_enricher:
+      enabled: true
+      prompt: prompts/git/repo/fragment.tmpl
+      max_input_chars: 1000
+    compose:
+      order: tier
+      max_chars: 5000
+    drift_threshold: 0.05
+    destinations: [vectors]
+    views:
+      - name: role
+        prompt: prompts/git/repo/role.tmpl
+        depends_on: ["**", "cmd/**"]

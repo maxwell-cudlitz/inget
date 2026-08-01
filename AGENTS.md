@@ -35,9 +35,9 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 ```
 cmd/inget/            enrichment entrypoint
 cmd/inget-fetch/      fetch entrypoint
-internal/cli/         shared cobra scaffolding: root command, version, error exit
+internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
-internal/config/      loading, precedence, validation, secret indirection
+internal/config/      loading, precedence, validation, secret indirection, hashing [implemented]
 internal/artifact/    envelope schema, manifest, shards, blob store
 internal/source/      connector registry (github/, monday/)
 internal/delta/       reconciliation, hashing, signatures, glob scoping
@@ -66,7 +66,12 @@ across two mains.
   (`--json` output, query results, `version`). Nothing writes log files.
 - Config is layered: `config.yaml` < `config.local.yaml` < `INGET_*` env, with `__`
   expressing nesting. Secrets appear only as the *names* of environment variables
-  (`token_env`, `api_key_env`, `dsn_env`), never as values.
+  (`token_env`, `api_key_env`, `dsn_env`), never as values. Read the whole file with
+  `config.Load`, the log block alone with `config.LoadLog`, and a secret with
+  `cfg.Secret(ref)`.
+- Config keys come from `mapstructure` tags. Adding a scalar field makes it
+  env-overridable automatically — `config.EnvKeys` walks the schema — so no registration
+  list needs updating. Decoding is strict: unknown keys fail the load.
 - Tests are stdlib `testing`, table-driven, asserting behavior over implementation.
 - Dependencies are pinned in `go.mod` and must be pure Go so binaries cross-compile
   statically. Prefer stdlib; see D15 for the approved library set.
@@ -107,5 +112,11 @@ require touching the pipeline.
 - **Secret vocabulary.** `internal/logging` deliberately does not redact `input_tokens`,
   `cache_key`, `related_keys` or `signature`. Do not widen the patterns to generic
   `token`/`key` matches; the redaction tests assert these negatives.
+- **Config hashing (`internal/config/hash.go`).** Hashes are computed from the decoded
+  struct, never from viper's raw settings map: an environment override arrives as a
+  string, so raw hashing would make an override that restates a file value look like a
+  config change and re-fetch everything. `Config` also implements `String` on purpose —
+  `fmt` reads unexported fields with `%+v`, which would otherwise print the resolved
+  secret snapshot.
 - **Cost.** `inget plan` exists so no run spends money unexpectedly. Any change that can
   increase LLM calls must be visible there first.

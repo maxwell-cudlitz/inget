@@ -80,6 +80,20 @@ func Setup(opts Options) (*slog.Logger, error) {
 	return logger, nil
 }
 
+// Validate reports whether the options name a level, format and destination this package
+// understands. It exists so the configuration layer can reject a bad log block while
+// validating the rest of the file, instead of failing later when the logger is built.
+func (o Options) Validate() error {
+	if _, err := ParseLevel(o.Level); err != nil {
+		return err
+	}
+	if _, err := parseFormat(o.Format); err != nil {
+		return err
+	}
+	_, err := destination(o.Destination)
+	return err
+}
+
 // New builds a logger writing to w. It exists separately from Setup so that tests can
 // capture output without touching the process streams or the slog default.
 func New(w io.Writer, opts Options) (*slog.Logger, error) {
@@ -87,18 +101,32 @@ func New(w io.Writer, opts Options) (*slog.Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	handlerOpts := &slog.HandlerOptions{Level: level}
-
-	var h slog.Handler
-	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
-	case "", "json":
-		h = slog.NewJSONHandler(w, handlerOpts)
-	case "text":
-		h = slog.NewTextHandler(w, handlerOpts)
-	default:
-		return nil, fmt.Errorf("invalid log format %q: want json or text", opts.Format)
+	newHandler, err := parseFormat(opts.Format)
+	if err != nil {
+		return nil, err
 	}
+	h := newHandler(w, &slog.HandlerOptions{Level: level})
 	return slog.New(NewRedactor(h, opts.Redact...)), nil
+}
+
+// handlerFunc constructs an encoding-specific slog handler.
+type handlerFunc func(io.Writer, *slog.HandlerOptions) slog.Handler
+
+// parseFormat maps a configured encoding name onto a handler constructor. An empty name
+// is JSON. Keeping the permitted set in one place is what lets Validate and New agree.
+func parseFormat(name string) (handlerFunc, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "json":
+		return func(w io.Writer, o *slog.HandlerOptions) slog.Handler {
+			return slog.NewJSONHandler(w, o)
+		}, nil
+	case "text":
+		return func(w io.Writer, o *slog.HandlerOptions) slog.Handler {
+			return slog.NewTextHandler(w, o)
+		}, nil
+	default:
+		return nil, fmt.Errorf("invalid log format %q: want json or text", name)
+	}
 }
 
 // ParseLevel maps a configured level name onto a slog.Level. An empty name is info.

@@ -1,0 +1,96 @@
+# The same settings as minimal.yaml with every mapping's keys written in a different
+# order, and the top-level blocks themselves reordered. Hashes computed from this file
+# must equal those computed from minimal.yaml: key order carries no meaning, only list
+# element order does.
+datatypes:
+  - destinations: [vectors]
+    drift_threshold: 0.05
+    views:
+      - depends_on: ["**", "cmd/**"]
+        prompt: prompts/git/repo/role.tmpl
+        name: role
+    compose:
+      max_chars: 5000
+      order: tier
+    fragment_enricher:
+      max_input_chars: 1000
+      prompt: prompts/git/repo/fragment.tmpl
+      enabled: true
+    enricher: llm
+    source: git
+    name: git/repo
+
+sources:
+  - limits:
+      max_concurrent: 2
+      requests_per_second: 5
+    domain:
+      max_inactive_days: 30
+      include_forks: false
+      orgs: ["acme"]
+    auth:
+      api_url: "https://api.github.com"
+      token_env: INGET_TEST_TOKEN
+    driver: github
+    name: git
+
+destinations:
+  - batch_size: 10
+    granularity: item
+    ef_search: 40
+    hnsw: { ef_construction: 64, m: 16 }
+    storage: halfvec
+    table: inget_vectors
+    dsn_env: INGET_TEST_DSN
+    driver: pgvector
+    name: vectors
+
+models:
+  embedder:
+    timeout: 10s
+    concurrency: 1
+    batch_size: 4
+    truncate_dims: 0
+    dimensions: 8
+    model: embed-1
+    base_url: "http://localhost:8080/v1"
+    driver: openai
+  generator:
+    price_per_mtok_out: 0.2
+    price_per_mtok_in: 0.1
+    timeout: 30s
+    concurrency: 2
+    max_input_chars: 4096
+    max_output_tokens: 128
+    seed: 1
+    temperature: 0
+    api_key_env: INGET_TEST_GENERATOR_KEY
+    model: gen-1
+    base_url: "http://localhost:4000/v1"
+    driver: openai
+
+state:
+  path: ./.inget/state.db
+  driver: sqlite
+
+enrich:
+  max_cascade_per_run: 100
+  max_reference_depth: 1
+
+retention:
+  missing_runs: 2
+  runs: 7d
+
+artifacts:
+  compression: zstd
+  max_fragments_per_item: 10
+  blob_max_bytes: 512
+  shard_target_bytes: 1024
+  url: "file://./.inget/artifacts"
+
+log:
+  destination: stderr
+  format: json
+  level: info
+
+version: 1
