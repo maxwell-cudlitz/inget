@@ -1,0 +1,39 @@
+# golangci-lint v2 configuration. Kept small on purpose: the standard set plus the
+# linters that catch the mistakes this codebase is most exposed to — unchecked errors,
+# unwrapped errors at boundaries, and resource leaks in the HTTP and database clients.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - nilerr
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - wrapcheck
+  settings:
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+  exclusions:
+    generated: lax
+    rules:
+      # Test helpers legitimately return unwrapped errors and use fixture values.
+      - path: _test\.go
+        linters:
+          - wrapcheck
+
+formatters:
+  enable:
+    - gofmt

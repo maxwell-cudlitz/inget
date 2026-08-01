@@ -1,0 +1,19 @@
+# Build output
+bin/
+
+# Local artifact store and any other local run state
+.inget/
+
+# Local configuration overrides; may name credentials, never commit
+config.local.yaml
+config.local.yml
+.env
+
+# Test and coverage output
+*.out
+coverage.*
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

@@ -49,8 +49,8 @@ credentials.
   `destinations` exist), enum values, dimension bounds, glob syntax.
 - `SecretRef` type resolving `*_env` names to values at load, never storing them in the
   serializable struct.
-- `config_hash` and per-datatype `domain_hash` computation over the canonicalized
-  effective config.
+- `config_hash` and per-datatype `domain_hash` over the effective config, serialized as
+  length-prefixed sorted key/value pairs rather than canonical JSON (D15).
 - Ship `config.yaml` with the documented defaults, all endpoints local.
 
 **Acceptance.** Table-driven tests for precedence (base < local < env), nested env
@@ -65,7 +65,8 @@ supported, documenting the known viper limitation.
 **Goal.** Round-trippable implementation of `docs/artifact-envelope.md`.
 
 **Actions.**
-- `internal/artifact`: `Manifest`, `Record`, `Fragment` types with JSON tags.
+- `internal/artifact`: `Manifest`, `Record`, `Fragment` types with JSON tags. Run IDs are
+  monotonic ULIDs from `oklog/ulid/v2` (D15).
 - `BlobStore` over `gocloud.dev/blob` for `file://`, `s3://`, `gs://`; two-level hex
   sharding; zstd via `klauspost/compress`; `HasBlob` existence check before write.
 - Shard writer rolling at `shard_target_bytes` uncompressed, emitting per-shard
@@ -113,9 +114,11 @@ reclaimable; `ReferencedBy` returns reverse edges; signature change is detectabl
   convention, so completeness is enforced structurally.
 - Cache key derivation for levels 1–3.
 - Glob scoping: match fragment keys against a view's `depends_on`, then compute the
-  scoped composed hash. `path.Match` semantics extended for `**`.
-- Drift measurement: normalized Levenshtein distance with the `drift_threshold`
-  comparison (D4).
+  scoped composed hash. Matching is `bmatcuk/doublestar/v4`, not a hand-extended
+  `path.Match` (D15).
+- Drift measurement: normalized Levenshtein distance via `agnivade/levenshtein`, with
+  the `drift_threshold` comparison (D4). Normalization against the longer string stays
+  in this package.
 - Deterministic composer: tier then path ordering, `max_chars` truncation.
 
 **Acceptance.** This is the highest-value test surface in the project. Table-driven
@@ -207,6 +210,9 @@ duplicating work. `inget plan` output matches what `inget run` then does.
   content retained only for fragments whose blob is absent from the store.
 - Noise filtering and tier classification; sub-file fragments for
   oversized files.
+- Secret detection over candidate file content via the `gitleaks` detect package (D15),
+  replacing any bespoke pattern list; matched content is excluded from artifacts and the
+  exclusion is recorded and counted. Confirm the dependency stays CGO-free.
 - `internal/ratelimit`: `x-ratelimit-*` handling, secondary-limit backoff, ETag
   conditional requests.
 - `inget-fetch` command with `--source --datatype --only --since --scope --event-file

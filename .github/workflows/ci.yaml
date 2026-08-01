@@ -1,0 +1,54 @@
+# Continuous integration: vet, lint and test on every push and pull request.
+#
+# Steps 1-8 of the implementation plan require no network access and no credentials, so
+# this workflow runs the full suite without secrets. Integration tests that need
+# Postgres or a live model are gated behind their own environment variables and stay
+# skipped here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2

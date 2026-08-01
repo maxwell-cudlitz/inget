@@ -552,11 +552,33 @@ hide that.
 | Retry | `cenkalti/backoff` | Exponential backoff with full jitter, context-aware. |
 | HTTP retry | `hashicorp/go-retryablehttp` | Transport-level retry for API clients. |
 | SQLite | `modernc.org/sqlite` | Pure Go, no CGO, keeps static cross-compiled binaries. |
+| Glob matching | `bmatcuk/doublestar/v4` | `path.Match` semantics plus `**`, which view dependency globs require (D3). Extending `path.Match` by hand is a known source of subtle mismatches, and wrong glob scoping corrupts the cascade in both directions. |
+| Edit distance | `agnivade/levenshtein` | Drift measurement (D4) needs a correct distance kernel; normalization against the longer string stays in `internal/delta`. A narrow algorithmic domain, so a researched library rather than a hand-rolled DP. |
+| Secret detection | `zricethezav/gitleaks/v8` | Scanning fetched content for committed credentials needs a maintained multi-provider ruleset with entropy checks, not a bespoke pattern list (see Security considerations). Module path retains the original `zricethezav` prefix although the repository moved. |
+| Run identifiers | `oklog/ulid/v2` | Run IDs are ULIDs so that lexical ordering is chronological ordering, which is how readers resolve `latest`. Correct monotonic generation under a shared entropy source is not worth reimplementing. |
 | Logging | stdlib `log/slog` | Structured JSON, no dependency. |
 | Testing | stdlib `testing` | Per conventions; table-driven. |
 
+Two related concerns deliberately stay in-tree.
+
+**Log attribute redaction** (`internal/logging`) is key-pattern matching against this
+codebase's own vocabulary, which is the opposite of a generic problem. Off-the-shelf
+redactors treat `token`, `key` and `secret` as substrings and would therefore mask
+`input_tokens`, `cache_key`, `related_keys` and `signature` — precisely the fields cost
+accounting and the invalidation cascade exist to expose. The custom allowlist is the
+entire job, so a dependency would add surface without removing work. This is distinct
+from secret *detection* in fetched content, which is delegated to gitleaks above.
+
+**Config and signature hashing** serializes sorted key/value pairs with length prefixes
+rather than adopting canonical JSON (RFC 8785). The only Go JCS implementation is
+unmaintained, and length prefixing sidesteps the float and unicode formatting ambiguity
+that makes canonical JSON a poor foundation for a hash the whole cascade depends on.
+
 Every dependency is pure Go, so binaries cross-compile statically for the Docker image
-and Homebrew tap. Exact versions are pinned in `go.mod`.
+and Homebrew tap. Exact versions are pinned in `go.mod`. gitleaks reaches its regex
+engine through a WASM runtime rather than CGO by default; step 9 must confirm the
+default build stays CGO-free, and drop the dependency for an in-tree ruleset if it does
+not.
 
 ---
 
