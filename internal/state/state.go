@@ -75,6 +75,12 @@ type Store interface {
 	// ViewState returns the persisted views of one item, keyed by view name.
 	ViewState(ctx context.Context, datatype, itemID string) (map[string]ViewState, error)
 
+	// ViewedItems returns the IDs of every item of a datatype that has at least one stored
+	// view, sorted. It is what `inget eval` samples from: an item with no view text has
+	// nothing to score, and finding those by asking per item would be one query per item
+	// in the corpus.
+	ViewedItems(ctx context.Context, datatype string) ([]string, error)
+
 	// PutViewState upserts one view of one item.
 	PutViewState(ctx context.Context, datatype, itemID string, v ViewState) error
 

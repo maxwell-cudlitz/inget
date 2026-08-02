@@ -87,6 +87,29 @@ func TestListElementDefaultsAreFilledIn(t *testing.T) {
 	}
 }
 
+// TestEvalDefaultsAndOverride covers both halves of the eval block's contract: a
+// configuration that omits it gates on D14's numbers, and an environment override still
+// reaches a threshold, since the whole block is scalars.
+func TestEvalDefaultsAndOverride(t *testing.T) {
+	base := fixture(t, "minimal.yaml") // declares no eval block
+
+	cfg := load(t, base)
+	if cfg.Eval.SampleSize != DefaultEvalSampleSize {
+		t.Errorf("eval.sample_size = %d, want the default %d", cfg.Eval.SampleSize, DefaultEvalSampleSize)
+	}
+	if cfg.Eval.Thresholds.SelfRetrieval != DefaultSelfRetrieval {
+		t.Errorf("eval.thresholds.self_retrieval = %v, want the default %v",
+			cfg.Eval.Thresholds.SelfRetrieval, DefaultSelfRetrieval)
+	}
+
+	t.Setenv(EnvName("eval.thresholds.self_retrieval"), "0.5")
+	t.Setenv(EnvName("eval.sample_size"), "5")
+	cfg = load(t, base)
+	if cfg.Eval.Thresholds.SelfRetrieval != 0.5 || cfg.Eval.SampleSize != 5 {
+		t.Errorf("eval = %+v, want the environment values 0.5 and 5", cfg.Eval)
+	}
+}
+
 func TestPrecedenceBaseLocalEnv(t *testing.T) {
 	base := fixture(t, "minimal.yaml")
 

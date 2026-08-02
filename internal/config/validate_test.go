@@ -39,6 +39,11 @@ func TestValidate(t *testing.T) {
 		{"reference depth", func(c *Config) { c.Enrich.MaxReferenceDepth = -1 }, "enrich.max_reference_depth"},
 		{"cascade cap", func(c *Config) { c.Enrich.MaxCascadePerRun = 0 }, "enrich.max_cascade_per_run"},
 
+		{"eval sample size", func(c *Config) { c.Eval.SampleSize = 0 }, "eval.sample_size"},
+		{"eval fraction above one", func(c *Config) { c.Eval.Thresholds.SelfRetrieval = 1.5 }, "eval.thresholds.self_retrieval"},
+		{"eval negative threshold", func(c *Config) { c.Eval.Thresholds.ViewCoverage = -0.1 }, "eval.thresholds.view_coverage"},
+		{"eval distance above two", func(c *Config) { c.Eval.Thresholds.Distinctiveness = 2.5 }, "eval.thresholds.distinctiveness"},
+
 		{"state driver", func(c *Config) { c.State.Driver = "mysql" }, "state.driver"},
 		{"postgres needs dsn", func(c *Config) { c.State.Driver, c.State.DSNEnv = "postgres", "" }, "state.dsn_env is required"},
 		{"sqlite needs path", func(c *Config) { c.State.Path = "" }, "state.path is required"},

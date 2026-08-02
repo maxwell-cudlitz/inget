@@ -54,13 +54,9 @@ func execute(cmd *cobra.Command, args []string, opts runOptions) error {
 	if err != nil {
 		return fmt.Errorf("loading configuration: %w", err)
 	}
-	datatypes := cfg.Datatypes
-	if len(args) == 1 {
-		dt, ok := cfg.Datatype(args[0])
-		if !ok {
-			return fmt.Errorf("unknown datatype: %s", args[0])
-		}
-		datatypes = []config.Datatype{*dt}
+	datatypes, err := selectDatatypes(cfg, args)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel, shutdownCh := pipeline.NotifyShutdown(cmd.Context())

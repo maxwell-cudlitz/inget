@@ -51,6 +51,19 @@ func buildFragmentEnricher(cfg *config.Config, gen model.Generator, dt config.Da
 	}), nil
 }
 
+// selectDatatypes resolves the optional datatype argument to the set a command operates on:
+// the named one, or every configured datatype when none is named.
+func selectDatatypes(cfg *config.Config, args []string) ([]config.Datatype, error) {
+	if len(args) == 0 {
+		return cfg.Datatypes, nil
+	}
+	dt, ok := cfg.Datatype(args[0])
+	if !ok {
+		return nil, fmt.Errorf("unknown datatype: %s", args[0])
+	}
+	return []config.Datatype{*dt}, nil
+}
+
 // composeOrder returns the compose order, falling back to the documented default.
 func composeOrder(dt config.Datatype) string {
 	if dt.Compose.Order != "" {

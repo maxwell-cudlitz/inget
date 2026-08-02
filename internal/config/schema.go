@@ -27,6 +27,19 @@ const (
 	DefaultComposeMaxChars = 120000
 )
 
+// Documented defaults for the quality harness (D14). They are filled in by normalize when
+// a configuration omits them, so `inget eval` gates on the design's numbers without every
+// deployment restating them. A threshold of 0 is therefore not distinguishable from an
+// absent one; it would gate nothing either way.
+const (
+	DefaultEvalSampleSize      = 20
+	DefaultSelfRetrieval       = 0.80
+	DefaultDistinctiveness     = 0.05
+	DefaultViewCoverage        = 0.90
+	DefaultViewDistinctiveness = 0.05
+	DefaultMetadataTop3        = 0.60
+)
+
 // Config is the effective configuration after layering, decoding and validation.
 type Config struct {
 	Version      int           `mapstructure:"version"`
@@ -34,6 +47,7 @@ type Config struct {
 	Artifacts    Artifacts     `mapstructure:"artifacts"`
 	Retention    Retention     `mapstructure:"retention"`
 	Enrich       Enrich        `mapstructure:"enrich"`
+	Eval         Eval          `mapstructure:"eval"`
 	State        State         `mapstructure:"state"`
 	Models       Models        `mapstructure:"models"`
 	Destinations []Destination `mapstructure:"destinations"`
@@ -75,6 +89,25 @@ type Retention struct {
 type Enrich struct {
 	MaxReferenceDepth int `mapstructure:"max_reference_depth"`
 	MaxCascadePerRun  int `mapstructure:"max_cascade_per_run"`
+}
+
+// Eval configures the quality harness (`inget eval`, D14). SampleSize is how many items
+// with stored views are sampled per datatype; the sample is also the retrieval pool, so
+// scores are comparable across runs and across embedders only at a fixed size.
+type Eval struct {
+	SampleSize int        `mapstructure:"sample_size"`
+	Thresholds Thresholds `mapstructure:"thresholds"`
+}
+
+// Thresholds are the floors every metric must reach for `inget eval` to exit zero. The
+// first, third and fifth are fractions of a sample; the two distinctiveness figures are
+// mean cosine distances, so their range is 0 to 2.
+type Thresholds struct {
+	SelfRetrieval       float64 `mapstructure:"self_retrieval"`
+	Distinctiveness     float64 `mapstructure:"distinctiveness"`
+	ViewCoverage        float64 `mapstructure:"view_coverage"`
+	ViewDistinctiveness float64 `mapstructure:"view_distinctiveness"`
+	MetadataTop3        float64 `mapstructure:"metadata_top3"`
 }
 
 // State selects the state store driver and how to reach it.

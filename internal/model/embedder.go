@@ -1,9 +1,9 @@
 // Embedding role of the OpenAI-compatible driver.
 //
 // Embed batches texts to /v1/embeddings and returns one unit vector per input, in input
-// order. Matryoshka (MRL) truncation to TruncateDims happens client-side and is followed
-// by re-normalization, so the vector contract (D8) holds regardless of what the provider
-// supports.
+// order. Repeated texts are sent once and fanned back out. Matryoshka (MRL) truncation to
+// TruncateDims happens client-side and is followed by re-normalization, so the vector
+// contract (D8) holds regardless of what the provider supports.
 package model
 
 import (
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,28 +49,65 @@ func NewEmbedder(cfg OpenAIEmbedderConfig) Embedder {
 
 // Embed returns one vector per text, in the same order as texts. Batching is sequential:
 // parallelism across batches belongs to the pipeline's worker pool.
+//
+// Repeated texts are sent once. Beyond saving tokens, that is a correctness fix: TEI 1.9.3 on
+// Metal was measured returning a wrong — internally consistent but unrelated — vector for a
+// text that appeared more than once in one request, nondeterministically, while the same text
+// sent alone embedded correctly. Identical text must produce an identical vector, so the
+// duplicate never reaches the server.
 func (e *openAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
 
+	unique, at := dedupe(texts)
 	batchSize := e.cfg.BatchSize
 	if batchSize <= 0 {
-		batchSize = len(texts)
+		batchSize = len(unique)
 	}
 
-	all := make([][]float32, 0, len(texts))
-	for i := 0; i < len(texts); i += batchSize {
-		batch := texts[i:min(i+batchSize, len(texts))]
+	embedded := make([][]float32, 0, len(unique))
+	for i := 0; i < len(unique); i += batchSize {
+		batch := unique[i:min(i+batchSize, len(unique))]
 
 		vecs, err := e.embedBatch(ctx, batch)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, vecs...)
+		embedded = append(embedded, vecs...)
 	}
 
+	// A repeated text gets its own copy of the vector, so one caller's slice cannot be
+	// aliased by another's.
+	all := make([][]float32, len(texts))
+	handed := make([]bool, len(unique))
+	for i, source := range at {
+		if handed[source] {
+			all[i] = slices.Clone(embedded[source])
+			continue
+		}
+		handed[source] = true
+		all[i] = embedded[source]
+	}
 	return all, nil
+}
+
+// dedupe returns the distinct texts in first-appearance order, and per input the index of its
+// text in that list.
+func dedupe(texts []string) ([]string, []int) {
+	unique := make([]string, 0, len(texts))
+	at := make([]int, len(texts))
+	seen := make(map[string]int, len(texts))
+	for i, text := range texts {
+		index, ok := seen[text]
+		if !ok {
+			index = len(unique)
+			seen[text] = index
+			unique = append(unique, text)
+		}
+		at[i] = index
+	}
+	return unique, at
 }
 
 // Model returns the configured model identifier.

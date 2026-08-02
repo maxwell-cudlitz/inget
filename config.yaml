@@ -34,6 +34,18 @@ enrich:
   max_reference_depth: 2               # reference resolution depth bound
   max_cascade_per_run: 5000            # cascaded invalidations; remainder deferred
 
+# `inget eval` (D14). The harness re-embeds stored view text and never generates, so it
+# needs no generator credentials. The sample is also the retrieval pool: scores only
+# compare across runs at a fixed sample_size.
+eval:
+  sample_size: 20                      # items with stored views sampled per datatype
+  thresholds:                          # floors; a breach exits non-zero
+    self_retrieval: 0.80               # a view's nearest neighbour is its own item
+    distinctiveness: 0.05              # mean cosine distance between different items
+    view_coverage: 0.90                # configured views with non-empty stored text
+    view_distinctiveness: 0.05         # mean cosine distance between views of one item
+    metadata_top3: 0.60                # metadata query finds the item in the top 3
+
 state:
   driver: postgres                     # postgres | sqlite
   dsn_env: INGET_STATE_DSN

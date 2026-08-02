@@ -28,7 +28,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 9 | GitHub connector | **done** |
 | 10 | Monday connector | not started (skipped ahead of 11) |
 | 11 | Reference resolution | **done** |
-| 12 | Quality harness | not started |
+| 12 | Quality harness | **done** |
 | 13 | Reindex and operations | not started |
 | 14 | Release and documentation | not started |
 
@@ -43,22 +43,22 @@ roughly 18 sessions rather than 14. Steps 1–8 need no network and no credentia
 
 | Step | Sections | Lines |
 |---|---|---|
-| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1307–1342, 1286–1306, 539–584 |
-| 2 | Configuration, D2 (hashing) | 752–940, 157–180 |
-| 3 | `artifact-envelope.md` in full, D5, D6 | all, 258–295 |
-| 4 | State schema, D13 | 587–688, 493–515 |
-| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–257, 1213–1240 |
-| 6 | D10, API/Interface | 366–419, 941–1103 |
-| 7 | D7, D8, D9, Destination schema | 296–365, 689–751 |
-| 8 | D11, Enrichment Pipeline, Edge Cases | 420–452, 1213–1264 |
-| 9 | `github/repo`, D6, Security considerations | 1144–1165, 280–295, 1265–1285 |
-| 10 | `monday/item` | 1166–1212 |
-| 11 | D12 | 453–492 |
-| 12 | D14, Testing Strategy | 516–538, 1343–1366 |
-| 13 | Edge Cases, `artifact-envelope.md` GC | 1241–1264, 235–247 |
-| 14 | Non-Goals, Repository Layout | 1367–1375, 1307–1342 |
+| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1368–1403, 1347–1367, 594–638 |
+| 2 | Configuration, D2 (hashing) | 806–1001, 157–180 |
+| 3 | `artifact-envelope.md` in full, D5, D6 | all, 261–298 |
+| 4 | State schema, D13 | 641–742, 530–552 |
+| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–260, 1274–1301 |
+| 6 | D10, API/Interface | 369–456, 1002–1164 |
+| 7 | D7, D8, D9, Destination schema | 299–368, 743–805 |
+| 8 | D11, Enrichment Pipeline, Edge Cases | 457–489, 1274–1325 |
+| 9 | `github/repo`, D6, Security considerations | 1205–1226, 283–298, 1326–1346 |
+| 10 | `monday/item` | 1227–1273 |
+| 11 | D12 | 490–529 |
+| 12 | D14, Testing Strategy | 553–593, 1404–1427 |
+| 13 | Edge Cases, `artifact-envelope.md` GC | 1302–1325, 235–247 |
+| 14 | Non-Goals, Repository Layout | 1428–1436, 1368–1403 |
 
-These offsets are valid for `feature-design.md` at 1375 lines. Editing that file shifts
+These offsets are valid for `feature-design.md` at 1436 lines. Editing that file shifts
 everything below the edit, so regenerate the map with
 `grep -n '^#\{2,3\} ' docs/feature-design.md` whenever the design changes.
 
@@ -1245,3 +1245,123 @@ deliverables — sampling, the five metrics, per-datatype reporting with a non-z
 `--embedder` override, threshold config — are implemented. This session did prerequisites and
 corrective work only. `.inget/` was cleaned at some point, so the corpus needs re-fetching,
 and `INGET_STATE_DSN` and `INGET_PGVECTOR_DSN` are not yet exported.
+
+## Step 12 record
+
+Implemented: `internal/eval` (sampling, the five metrics of D14, the metadata-derived query,
+per-datatype and per-view reporting, the verdict); `eval:` config block with the documented
+thresholds, defaulted in `normalize` and range-checked in `validate`; `state.ViewedItems` on
+the Store with a conformance case; `cmd/inget/eval.go` wiring the command, the three embedder
+overrides and JSON-on-stdout reporting with a non-zero exit; `selectDatatypes` lifted into
+`cmd/inget/helpers.go` so `run`, `plan` and `eval` resolve the datatype argument once.
+
+Verified: `gofmt -l .` clean, `go vet ./...` clean, `golangci-lint run` (v2.12.2) reports 0
+issues, `go test -race -count=1 ./...` passes, `make build` produces both binaries, `go mod
+tidy` is a no-op. The gate test is `TestDegradedViewsBreachThresholds`: the same four items
+with every view replaced by one generic sentence breach the distance thresholds while coverage
+still passes, which is the point of scoring five metrics rather than counting rows.
+`TestLiveEmbedderSeparatesHealthyFromDegraded` ran against Qwen3-Embedding-0.6B under Homebrew
+TEI 1.9.3 on Metal and measured, on the healthy fixture: self-retrieval 1.0000 over 12,
+distinctiveness 0.5759 over 54 pairs, coverage 1.0000, view distinctiveness 0.2776 over 4
+items, metadata top-3 1.0000 over 4 — every threshold cleared. The degraded fixture scored
+self-retrieval 0.2500 and both distances 0.0000.
+
+### What the harness measures, and why not the obvious thing
+
+Retrieval is computed **inside the re-embedded sample**, not against a destination. The plan
+does not say which, and the destination was the wrong answer for three separate reasons: the
+sample is embedded by the model under test, whose vectors a destination bound to another model
+must reject (D7); the vectors already in a destination were produced by the configured
+embedder, so `--embedder` could not be compared against them at all; and a quality gate that
+needs a reachable vector database is a gate that stops being run. The cost is that scores are
+relative to the sample, so `eval.sample_size` is part of a score's meaning — two runs compare
+only at a fixed size, which is also why the sample is drawn in digest order rather than at
+random.
+
+**Self-retrieval excludes the query's own vector.** With the vector included the metric is
+trivially 1.0 for every corpus, since a query identical to a document always ranks that
+document first — it would have measured nothing. Leave-one-out makes it measure whether an
+item's views retrieve *each other* before another item's, which is the property "a view's own
+text retrieves that item at rank 1" was after. An item with one view therefore has nothing to
+be retrieved by and is not scored.
+
+**A metric with no evidence is skipped, not scored.** A skipped metric is neither a pass nor a
+breach: a single-view datatype cannot have self-retrieval or view distinctiveness, and calling
+that a failure would report a configuration choice as a quality problem. An unscorable
+*corpus* is different and does not pass: no items, no stored views, no view under a configured
+name, or a single item all exit non-zero with a reason naming what to run.
+
+### Choices made where the plan was silent
+
+- **The sample is drawn from items that have stored views**, not from all live items, and the
+  report carries `live_items`, `viewed_items` and `sampled_items` so the difference is visible.
+  Sampling unprocessed items would have scored "the pipeline has not finished" as "the prompts
+  are bad". That needed one new read: `ViewedItems`, one `SELECT DISTINCT item_id`, because
+  finding processed items by asking per item is one query per item in the corpus.
+- **View rows under names configuration no longer declares are ignored.** They are stale state
+  awaiting `state gc`, and scoring them would report on a view nobody asked for.
+- **The metadata query is built by value shape, not by key name.** Metadata keys differ per
+  connector, so nothing generic can name the useful fields; what is generic is that a URL, a
+  timestamp, a bare number and a single character say where or when a record lives rather than
+  what it is about. Those are dropped, the rest are joined in key order, duplicates once, and
+  the keys themselves are excluded because they are identical across every item of a datatype
+  and would dilute the part that discriminates. An oversized value is clipped rather than
+  dropped: a long description is the most informative field an item has.
+- **Thresholds are applied per datatype, and the per-view breakdown is informational.** One
+  weak view out of eight is a prompt to fix, not a reason to fail a datatype, and the report
+  carries per-view coverage, self-retrieval, vector count and mean length so that which one it
+  is takes no second command. `MeanChars` is there because an unexpectedly short view is the
+  first symptom of a prompt that has started refusing.
+- **Thresholds are plain floats defaulted in `normalize`, not pointers.** The schema's stated
+  convention is a pointer for a field whose zero value is meaningful, but `EnvKeys` walks a
+  zero `Config` and `flatten` skips nil pointers, so a pointer threshold would not have been
+  env-overridable — which is exactly how CI would want to set one. The cost is that 0 is
+  indistinguishable from unset; it would gate nothing either way.
+- **Three embedder override flags, not one.** `--embedder` alone cannot express a real A/B: a
+  second model usually means a second endpoint and a different native width, and a width
+  mismatch is rejected by the embedder client before any score exists. `--embedder-url` and
+  `--embedder-dims` complete it, and a truncation target the new model cannot satisfy is
+  dropped rather than left to fail every call.
+- **`eval` is a positional argument like `run` and `plan`**, not the `--datatype` flag the
+  design's CLI sketch shows, matching what the two implemented commands already do.
+
+### Embedder dedupe: a measured server bug, fixed in the client
+
+`internal/model/embedder.go` now sends a repeated text once and fans the vector back out.
+This is not an optimisation. Measured against Homebrew TEI 1.9.3 on Metal serving
+Qwen3-Embedding-0.6B on 2026-08-02:
+
+- A text appearing more than once in one `/v1/embeddings` request came back with a vector
+  whose cosine against the same text embedded alone was 0.25 — internally consistent across
+  the duplicates, unrelated to the correct vector.
+- It is nondeterministic: `[mid, mid]` returned the correct vector twice on two attempts and
+  the wrong one on a third.
+- Distinct inputs are unaffected. A four-text batch, and mixed-length pairs in both orders,
+  matched their single-text embeddings at cosine 1.000000, so this is not a padding or
+  last-token-pooling problem.
+- Single-text requests are stable across repeats.
+
+The client-side fix is correct independently of the bug — identical text must embed
+identically — and it is why the degraded fixture now scores distinctiveness 0.0000 instead of
+0.1244. It also cut the live test from 6.76s to 0.83s by embedding 5 unique texts instead of
+16. The pipeline's `embedViews` benefits without change, which matters: two views of one item
+producing byte-identical text would otherwise have stored a garbage vector silently.
+
+### Known gaps
+
+- **No live end-to-end run behind the harness.** The plan's prerequisite — `inget-fetch` then
+  `inget run` for one datatype, then `inget eval` over the result — has not been done here.
+  `INGET_GITHUB_TOKEN` is not in this environment, no PostgreSQL or pgvector is running, and a
+  real run spends generator tokens. What has been exercised end to end is `inget eval` against
+  an empty sqlite state (reports unscorable, exits 1) and the harness against seeded state with
+  both a fake and a live embedder.
+- **The retrieval pool is the sample, so the metric gets easier as the corpus grows** relative
+  to a real query against the whole index. A pool of every stored view would need the whole
+  corpus re-embedded per run, which is the cost D14 chose not to pay. Watch for scores that
+  look good on a 20-item sample and worse in `inget query`.
+- **`metadata_top3` cannot be scored for a datatype whose items carry no prose metadata.** It
+  is reported as skipped, which is honest but means one of the five gates is silently absent
+  for such a datatype.
+- **The Monday datatype is still unmeasured**, since step 10 has no connector, so nothing has
+  exercised the harness against a `passthrough`-style corpus where the embedder does the
+  semantic work — the case D14 says reporting per datatype exists for.

@@ -13,6 +13,11 @@ const (
 SELECT view_name, input_hash, text, embedded_hash, model, dims, signature
 FROM views WHERE datatype = ? AND item_id = ?`
 
+	// Ordered so that a caller sampling from the result gets the same set on every run
+	// regardless of how the database happens to return rows.
+	viewedItemsSQL = `
+SELECT DISTINCT item_id FROM views WHERE datatype = ? ORDER BY item_id`
+
 	viewUpsertSQL = `
 INSERT INTO views (datatype, item_id, view_name, input_hash, text, embedded_hash, model, dims, signature)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -49,6 +54,23 @@ func (s *store) ViewState(ctx context.Context, datatype, itemID string) (map[str
 		return nil, fmt.Errorf("reading views of %s/%s: %w", datatype, itemID, err)
 	}
 	return views, nil
+}
+
+// ViewedItems implements Store.
+func (s *store) ViewedItems(ctx context.Context, datatype string) ([]string, error) {
+	var ids []string
+	err := s.each(ctx, viewedItemsSQL, []any{datatype}, func(rows *sql.Rows) error {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scanning viewed item: %w", err)
+		}
+		ids = append(ids, id)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading %s items with views: %w", datatype, err)
+	}
+	return ids, nil
 }
 
 // viewArgs builds the arguments of viewUpsertSQL. Shared by PutViewState and

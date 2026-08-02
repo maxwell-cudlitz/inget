@@ -98,8 +98,11 @@ func decoderOptions() []viper.DecoderConfigOption {
 // normalize applies the documented defaults that no configuration layer can supply.
 // Viper cannot address list elements, so a datatype omitting `compose` has nothing to
 // inherit from; the default is filled in here instead, before hashing, so a hash always
-// reflects effective behavior.
+// reflects effective behavior. The eval block is defaulted here too, for a different
+// reason: its numbers are decided by D14 rather than by a deployment, so a configuration
+// that says nothing about quality still gates on the design's thresholds.
 func normalize(c *Config) {
+	normalizeEval(&c.Eval)
 	for i := range c.Datatypes {
 		d := &c.Datatypes[i]
 		if d.Compose.Order == "" {
@@ -107,6 +110,24 @@ func normalize(c *Config) {
 		}
 		if d.Compose.MaxChars == 0 {
 			d.Compose.MaxChars = DefaultComposeMaxChars
+		}
+	}
+}
+
+// normalizeEval fills every unset eval setting with its documented default.
+func normalizeEval(e *Eval) {
+	if e.SampleSize == 0 {
+		e.SampleSize = DefaultEvalSampleSize
+	}
+	for field, value := range map[*float64]float64{
+		&e.Thresholds.SelfRetrieval:       DefaultSelfRetrieval,
+		&e.Thresholds.Distinctiveness:     DefaultDistinctiveness,
+		&e.Thresholds.ViewCoverage:        DefaultViewCoverage,
+		&e.Thresholds.ViewDistinctiveness: DefaultViewDistinctiveness,
+		&e.Thresholds.MetadataTop3:        DefaultMetadataTop3,
+	} {
+		if *field == 0 {
+			*field = value
 		}
 	}
 }

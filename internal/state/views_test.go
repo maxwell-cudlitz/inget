@@ -2,7 +2,10 @@
 // guard and the level-2 and level-3 guards themselves.
 package state
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // derivation builds a cached derivation for one fragment under one signature.
 func derivation(cacheKey, signature, output string) Derivation {
@@ -162,6 +165,33 @@ var viewCases = []storeCase{
 			}
 			if len(got) != 3 || got["role"] != updated || got["stack"].InputHash != "sha256:stack" {
 				t.Errorf("ViewState = %+v, want three views with only role updated", got)
+			}
+		},
+	},
+	{
+		name: "ViewedItems lists only items with stored views, sorted",
+		run: func(t *testing.T, h harness) {
+			ctx := t.Context()
+			for _, id := range []string{"b/two", "a/one", "c/none"} {
+				seedItem(t, h, id, "fp-1")
+			}
+			for _, id := range []string{"b/two", "a/one"} {
+				v := ViewState{Name: "role", InputHash: "sha256:" + id, Text: "text", Signature: "sig-1"}
+				if err := h.PutViewState(ctx, testDatatype, id, v); err != nil {
+					t.Fatalf("PutViewState %s: %v", id, err)
+				}
+			}
+			// A second view of an already-listed item must not duplicate it.
+			second := ViewState{Name: "stack", InputHash: "sha256:stack", Text: "text", Signature: "sig-1"}
+			if err := h.PutViewState(ctx, testDatatype, "a/one", second); err != nil {
+				t.Fatalf("PutViewState a/one stack: %v", err)
+			}
+			got, err := h.ViewedItems(ctx, testDatatype)
+			if err != nil {
+				t.Fatalf("ViewedItems: %v", err)
+			}
+			if !slices.Equal(got, []string{"a/one", "b/two"}) {
+				t.Errorf("ViewedItems = %v, want [a/one b/two]", got)
 			}
 		},
 	},

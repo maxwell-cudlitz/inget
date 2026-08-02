@@ -2,8 +2,8 @@
 // invalidation cascade and enrichment pipeline over them, and upserts view vectors into
 // destinations. It holds no source credentials.
 //
-// This entrypoint wires the shared root command and the subcommands that exist; the run,
-// plan, reindex, state, query and eval subcommands arrive in later implementation steps.
+// This entrypoint wires the shared root command and the subcommands that exist; the reindex,
+// state and query subcommands arrive in later implementation steps.
 package main
 
 import "github.com/maxwellcudlitz/inget/internal/cli"
@@ -19,5 +19,6 @@ func main() {
 		migrateCommand(),
 		runCommand(),
 		planCommand(),
+		evalCommand(),
 	)
 }

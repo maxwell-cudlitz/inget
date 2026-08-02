@@ -418,6 +418,16 @@ Verified provider facts as of 2026-07-31:
   `[128,256,384,512,768,1024,1536,2048,2560]`, 32K sequence length, MTEB English v2
   70.70, MTEB Code v1 75.41.
 
+  **Duplicate inputs in one request are not safe on TEI 1.9.3 (Metal).** Measured
+  2026-08-02: a text appearing more than once in one `/v1/embeddings` call returned a
+  vector whose cosine against the same text embedded alone was 0.25 — consistent across the
+  duplicates, unrelated to the correct vector — and it is nondeterministic, with the same
+  pair returning correct vectors on two attempts and wrong ones on a third. Distinct
+  inputs, including mixed lengths in either order, matched their single-text embeddings at
+  cosine 1.000000, so this is not padding or last-token pooling. `internal/model` therefore
+  sends each distinct text once and fans the vector back out, which is what "identical text
+  embeds identically" requires regardless of the server.
+
 **Rationale.** A single driver for two hosted providers plus three local servers is
 justified because all five speak the same wire format; a provider-specific client per
 vendor would be duplicated code with no added capability. Local-by-default satisfies
@@ -834,6 +844,15 @@ retention:
 enrich:
   max_reference_depth: 2                # reference resolution depth bound
   max_cascade_per_run: 5000             # cascaded invalidations; remainder deferred
+
+eval:                                  # quality harness thresholds (D14)
+  sample_size: 20                      # items with stored views sampled per datatype
+  thresholds:                          # floors; a breach exits non-zero
+    self_retrieval: 0.80
+    distinctiveness: 0.05
+    view_coverage: 0.90
+    view_distinctiveness: 0.05
+    metadata_top3: 0.60
 
 state:
   driver: postgres                     # postgres | sqlite

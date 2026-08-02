@@ -43,6 +43,7 @@ inget --help
 inget migrate            # create the state schema and the vector tables
 inget plan [datatype]    # what a run would do, and what it would cost
 inget run  [datatype]    # enrich, embed, upsert
+inget eval [datatype]    # score retrieval quality against the thresholds
 
 inget-fetch              # enumerate a source and write an artifact run
 ```
@@ -58,6 +59,7 @@ inget migrate
 inget-fetch --limit 20   # write a committed artifact run
 inget plan               # what would change, and what it would cost
 inget run                # enrich, embed, upsert
+inget eval               # did the result come out searchable?
 ```
 
 `inget plan` before `inget run` is the point of the design: you see the number of LLM calls
@@ -101,8 +103,51 @@ something was removed at the source.
 
 ```bash
 inget query "which repos handle terraform"
-inget eval
 ```
+
+### Quality
+
+`inget eval` answers the question a vector pipeline otherwise leaves open: is what you
+stored actually retrievable? It samples items that have stored view text, re-embeds that
+text, and scores five metrics per datatype and per view against thresholds in config. A
+breach exits non-zero, so it works as a CI gate for a new datatype or a prompt change.
+
+```bash
+inget eval                      # every configured datatype
+inget eval github/repo          # one datatype
+inget eval --embedder BAAI/bge-m3 --embedder-url http://localhost:8091/v1 --embedder-dims 1024
+```
+
+| Metric | What a low score means | Default floor |
+|---|---|---|
+| `self_retrieval` | an item's views do not look like each other's nearest neighbours | 0.80 |
+| `distinctiveness` | different items embed to nearly the same place | 0.05 |
+| `view_coverage` | some configured view produced no text | 0.90 |
+| `view_distinctiveness` | the views of one item are restatements of each other | 0.05 |
+| `metadata_top3` | a query built from an item's own metadata does not find it | 0.60 |
+
+Reports are JSON on stdout with a per-view breakdown, so `inget eval | jq '.[].views'`
+shows which prompt is the weak one rather than only that the datatype is weak. The floors
+and the sample size are config, and every key is env-overridable:
+
+```yaml
+eval:
+  sample_size: 20             # items with stored views sampled per datatype
+  thresholds:
+    self_retrieval: 0.80
+    distinctiveness: 0.05
+    view_coverage: 0.90
+    view_distinctiveness: 0.05
+    metadata_top3: 0.60
+```
+
+Two properties are worth knowing. It never calls the generator — it re-embeds text already
+in state — so it needs no generator credentials and costs nothing but embedding time, and
+running it twice on the same corpus gives the same numbers. And the retrieval pool is the
+sample itself, so scores are comparable across runs and across embedders at a fixed
+`eval.sample_size`, but not between different sample sizes. An empty or single-item corpus
+is reported as unscorable and exits non-zero: it means `inget-fetch` and `inget run` have
+not populated anything to measure.
 
 ## Configuration
 
@@ -239,9 +284,12 @@ that look ordinary and mean nothing. Changing `models.embedder` is therefore a r
 a config edit, and the error says so rather than letting the write through.
 
 Steps 1–8 of the plan need no network access and no credentials, so most development runs
-entirely offline against fakes. The destination tests are the exception: HNSW recall and
-halfvec casting are the extension's behaviour and cannot be faked, so they skip unless
-`INGET_TEST_PG` points at a scratch database with pgvector.
+entirely offline against fakes. Two suites are the exception. The destination tests need
+pgvector — HNSW recall and halfvec casting are the extension's behaviour and cannot be faked
+— and skip unless `INGET_TEST_PG` points at a scratch database with it. The quality
+harness's live case needs a reachable embedder and skips unless `INGET_TEST_EMBEDDER_URL`
+names one; it is the only test that measures a real embedding space rather than a synthetic
+one, and it needs no database and no credentials.
 
 ## Security notes
 

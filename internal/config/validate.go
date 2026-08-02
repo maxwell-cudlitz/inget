@@ -31,6 +31,7 @@ func (c *Config) Validate() error {
 	c.validateArtifacts(v)
 	c.validateRetention(v)
 	c.validateEnrich(v)
+	c.validateEval(v)
 	c.validateState(v)
 	c.validateModels(v)
 	c.validateDestinations(v)
@@ -70,6 +71,20 @@ func (c *Config) validateEnrich(v *validator) {
 		v.failf("enrich.max_reference_depth = %d, want 0 or more", c.Enrich.MaxReferenceDepth)
 	}
 	v.positive("enrich.max_cascade_per_run", int64(c.Enrich.MaxCascadePerRun))
+}
+
+// validateEval checks the quality harness settings. Every threshold is defaulted by
+// normalize, so a value seen here was written by a human: a fraction outside 0..1 or a
+// cosine distance outside 0..2 is a typo that would otherwise make the gate meaningless in
+// one direction or unpassable in the other.
+func (c *Config) validateEval(v *validator) {
+	v.positive("eval.sample_size", int64(c.Eval.SampleSize))
+	t := c.Eval.Thresholds
+	v.within("eval.thresholds.self_retrieval", t.SelfRetrieval, 1)
+	v.within("eval.thresholds.distinctiveness", t.Distinctiveness, 2)
+	v.within("eval.thresholds.view_coverage", t.ViewCoverage, 1)
+	v.within("eval.thresholds.view_distinctiveness", t.ViewDistinctiveness, 2)
+	v.within("eval.thresholds.metadata_top3", t.MetadataTop3, 1)
 }
 
 // validateState checks the driver and the field each driver needs to reach its store.
@@ -154,6 +169,13 @@ func (v *validator) positive(path string, got int64) {
 func (v *validator) nonNegative(path string, got float64) {
 	if got < 0 {
 		v.failf("%s = %v, want 0 or more", path, got)
+	}
+}
+
+// within checks that a score threshold falls inside 0..max.
+func (v *validator) within(path string, got, max float64) {
+	if got < 0 || got > max {
+		v.failf("%s = %v, want between 0 and %v", path, got, max)
 	}
 }
 

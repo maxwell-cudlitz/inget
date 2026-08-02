@@ -33,7 +33,7 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 ## Layout
 
 ```
-cmd/inget/            enrichment entrypoint: migrate, run, plan   [implemented]
+cmd/inget/            enrichment entrypoint: migrate, run, plan, eval   [implemented]
 cmd/inget-fetch/      fetch entrypoint; fetching is the root command's own action [implemented]
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
@@ -45,6 +45,7 @@ internal/delta/       reconciliation, hashing, signatures, glob scoping [impleme
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      enricher interface, llm + passthrough + fragment enrichers, prompts [implemented]
 internal/enrich/refs/ reference resolvers (inget, http), key extraction, invalidation cascade [implemented]
+internal/eval/        quality harness: sampling, five metrics, per-view report [implemented]
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   Limiter interface, header parsers, github limiter [implemented]
@@ -137,6 +138,15 @@ INGET_TEST_PG='postgres://inget:inget@127.0.0.1:55433/inget?sslmode=disable' \
   go test -race ./internal/destination/...
 ```
 
+The quality harness has a live case of its own, gated on a reachable embedder. It needs no
+database and no credentials — state is sqlite in a temp directory — and it is the only test
+that measures a real embedding space rather than a synthetic one:
+
+```bash
+text-embeddings-router --model-id Qwen/Qwen3-Embedding-0.6B --port 8090 --hostname 127.0.0.1
+INGET_TEST_EMBEDDER_URL=http://127.0.0.1:8090/v1 go test -race ./internal/eval/ -run TestLive -v
+```
+
 ## Extension points
 
 Each of these is a registry plus an interface; adding an implementation should not
@@ -151,7 +161,8 @@ require touching the pipeline.
   skip, tombstones and the fragment cap. A connector returns fragments sorted by tier then key
   and reports its own non-fatal problems as `Result.Warnings`.
 - **A datatype**: define its fragmenter, tiers and views in config, add prompt templates
-  under `prompts/<source>/<datatype>/`, then gate it with `inget eval`.
+  under `prompts/<source>/<datatype>/`, then gate it with `inget eval`. The harness needs no
+  code change: it reads the view list from config and reports per datatype.
 - **An enricher**: implement the enricher interface in `internal/enrich/`; it must
   contribute every input to its signature (D2) or the cascade will serve stale output.
 - **A reference resolver**: implement `refs.Resolver` in `internal/enrich/refs/`, call
@@ -236,6 +247,31 @@ require touching the pipeline.
   tests it directly; that set must include deleted keys. Filtering it against the current
   fragment set instead — the obvious-looking refactor — makes a view whose only changed
   dependency was deleted look skippable, and it then stays stale forever.
+- **`inget eval` reads stored text and never generates (`internal/eval/eval.go`, D14).** It
+  takes an `Embedder` and no `Generator`, deliberately: generation is not reproducible on
+  either candidate provider, so regenerating per run would fold that variance into every
+  metric and confound the `--embedder` comparison the whole decision exists to serve. Adding
+  a generator to the harness would make its numbers unusable for the one job they have.
+- **Eval retrieval is computed inside the sample, not against a destination
+  (`internal/eval/vector.go`).** The sample is re-embedded by the embedder under test, whose
+  vectors do not belong in a destination bound to another model (D7), and the gate must run
+  without a reachable vector database. Two consequences: scores compare across runs only at a
+  fixed `eval.sample_size`, and the sample is drawn in digest order rather than at random so
+  that two runs score the same items.
+- **Self-retrieval excludes the query's own vector (`internal/eval/metrics.go`).** A query
+  identical to a document always ranks that document first, so including it would report a
+  perfect score forever. What is measured is whether an item's views retrieve *each other*
+  before another item's, which is why a single-view item is reported as unscorable rather than
+  as a hit. Every metric with a zero denominator is skipped, and a skipped metric is neither a
+  pass nor a breach — but an unscorable corpus is not a pass, because "the pipeline never ran"
+  must not read as "quality is fine".
+- **Repeated texts are sent to the embedder once (`internal/model/embedder.go`).** Measured on
+  2026-08-02: TEI 1.9.3 on Metal returned a wrong — internally consistent, unrelated to the
+  text — vector for an input that appeared more than once in one request, nondeterministically,
+  while the same text sent alone embedded correctly. Distinct inputs, including mixed lengths,
+  were unaffected. `Embed` therefore dedupes before batching and fans the vector back out. Do
+  not remove that: identical text must embed identically, and eval's distinctiveness metric
+  reads 0.12 instead of 0 on a degenerate corpus when it does not.
 - **The composed document format is part of the cache key
   (`internal/delta/compose.go`).** Entries are joined `\n---\n` and headed `## <key>`.
   Changing the separator, the header or the ordering changes every level-2 hash and
