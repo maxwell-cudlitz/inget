@@ -20,7 +20,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 1 | Project skeleton | **done** |
 | 2 | Configuration | **done** |
 | 3 | Artifact envelope and blob store | **done** |
-| 4 | State store | not started |
+| 4 | State store | **done** |
 | 5 | Delta engine | not started |
 | 6 | Model clients | not started |
 | 7 | pgvector destination | not started |
@@ -234,6 +234,115 @@ Known limitations, deliberate:
 - No CLI command was added. Step 3's actions do not call for one, and `inget-fetch` is the
   first legitimate caller.
 
+## Step 4 record
+
+Implemented: `internal/state`, the persistence surface for every guard level, plus
+`migrations/` as an embedded goose migration set. One `Store` interface, one
+implementation, two dialects: postgres (default, schema `inget_state`, pgxpool behind
+database/sql) and sqlite (modernc.org/sqlite, for offline development). The schema is the
+design's state schema verbatim, with `locks` added for sqlite only.
+
+Files: `state.go` (interface and its contract), `types.go` (value types and status
+vocabularies), `dialect.go` (the three differences plus the placeholder rewriter),
+`open.go` (options, connection setup), `drivers.go` (sqlite registration), `store.go`
+(exec/get/each/inTx helpers, null and JSON handling), `migrate.go`, `items.go`,
+`fragments.go`, `derivations.go`, `views.go`, `refs.go`, `signatures.go`, `runs.go`,
+`work.go`, `lock.go`, `config.go` (the one bridge to `internal/config`).
+`migrations/embed.go` plus `migrations/state/{postgres,sqlite}/00001_init.sql`.
+
+Pinned: `github.com/jackc/pgx/v5` v5.10.0, `modernc.org/sqlite` v1.55.0,
+`github.com/pressly/goose/v3` v3.27.3. All pure Go: `CGO_ENABLED=0 GOOS=linux
+GOARCH=amd64` cross-compiles both binaries at 5.3 MB.
+
+Verified: `make build test lint` green, `golangci-lint run` 0 issues, `go mod tidy` a
+no-op. The conformance suite is 57 cases and passes against **both** drivers — postgres
+via `INGET_TEST_PG` against `postgres:17-alpine` in Docker, which is how the postgres-only
+paths (advisory lock, `SKIP LOCKED`, `jsonb`, quoted `"binary"`, `search_path`) were
+actually exercised rather than assumed. The acceptance items specifically: a second `Lock`
+on a held datatype returns `ErrLocked` from a separate connection; claimed-but-uncompleted
+work is reclaimed by `ResetClaims` and re-claimed; `ReferencedBy` returns reverse edges and
+loses the ones dropped from an edge set; a signature change is visible through
+`Signature`/`PutSignature`; four concurrent workers claim every item exactly once.
+
+Deviations from the design and the plan, all deliberate:
+
+- **One implementation over `database/sql`, not two.** The plan reads as two drivers with
+  their own code. Twenty-odd statements written twice is twenty-odd chances for the drivers
+  to disagree, and a conformance suite cannot catch a divergence it is testing against
+  itself. Postgres still uses `pgxpool` exactly as specified — `stdlib.OpenDBFromPool`
+  adapts it — so `pgx.CopyFrom` is still reachable for step 7, and `rowserrcheck` and
+  `sqlclosecheck` (already enabled in `.golangci.yml`) now have something to check.
+- **`StateStore` is named `Store`.** `state.StateStore` stutters; step 3 renamed
+  `BlobStore` to `artifact.Store` for the same reason.
+- **`ClaimWork` takes a datatype.** The design's signature returns bare item IDs while
+  `CompleteWork` requires a datatype, so a run spanning datatypes could not complete what
+  it claimed. Adding the parameter keeps it symmetric with `EnqueueWork` and
+  `CompleteWork`, and a run holds a per-datatype lock anyway.
+- **Four methods the design does not list**: `Migrate` and `Close` (lifecycle, mirroring
+  `Destination.Migrate`); `Item`, so the composed hash and metadata that `PutItem` writes
+  can be read back; `ResetClaims`, without which stranded claims are unreachable;
+  `ResumableRun`, without which a restarted process cannot find the run whose queue it
+  should adopt and the work table's resumability is unusable.
+- **`PutItem` takes one struct.** `Item` gains `Source`, `RunID` and `ComposedHash` because
+  the `items` row has those columns and `source_name` is NOT NULL. Three trailing string
+  parameters would be three chances to swap two of them.
+- **`RefEdgeSource` and `ItemKey` are one type.** Identical shape, and one is the reverse
+  of the other.
+- **`internal/state` does not import `internal/artifact`.** Sharing a `Scope` type would
+  link the gocloud backends — 27 MB — into anything touching state. Scope is a string with
+  constants here.
+
+Choices made where the plan was silent:
+
+- **`search_path` rather than qualified table names.** The pool sets
+  `search_path=inget_state, public` as a startup parameter, so runtime SQL is unqualified
+  and identical for both drivers. Migration DDL *is* qualified, because it is read by
+  humans and may be applied by the goose CLI. `Migrate` creates the schema itself before
+  goose runs: goose records its version table through the search_path, and if the schema
+  did not exist yet that table would land in `public` and the next run would believe
+  nothing had been applied.
+- **No timestamp crosses the interface.** Every timestamp is written by
+  `DEFAULT CURRENT_TIMESTAMP` or by the statement itself, and no method returns one.
+  SQLite has no timestamp type, so a returned timestamp needs per-dialect encoding;
+  nothing needs one until `inget state show` (step 13), which can add typed accessors.
+- **`PutFragments` owns the GC counter.** It takes the item's *complete* fragment set:
+  first every fragment of the item is counted missing, then the present ones are upserted
+  back to zero. Two fixed statements instead of a `NOT IN` list of up to 2000 keys, and the
+  counter counts consecutive absences, which is what `retention.missing_runs` means.
+- **`Derivation` reads and touches in one statement** (`UPDATE ... RETURNING output`).
+  A cache hit on the hottest path in the pipeline costs one round trip, not two. The
+  consequence is that reads write, so the state store cannot be a read replica.
+- **`PutRefs` replaces an item's whole edge set.** A merge would leave an edge behind when
+  a reference is removed, and a stale reverse edge invalidates views forever.
+- **`ResumableRun` requires the config hash to match.** A run made under a different
+  configuration computed a work set that may no longer be the right one, so it is not
+  adopted. `StartRun` is an upsert so the adopted run can be reopened.
+- **Terminal run statuses are a closed set** and `FinishRun` on an unknown run is an error.
+  A typo'd status would silently make a run unresumable.
+- **`ClaimWork` sorts in Go.** Found by the postgres run: `UPDATE ... RETURNING` yields
+  rows in the order the update touched them, not the subquery's `ORDER BY`. sqlite happened
+  to agree with the subquery, so the ordering assertion passed there and failed on
+  postgres. This is the cross-driver divergence the suite exists to find, and it is the
+  argument for running it against both before calling a step done.
+- **The sqlite lock is `INSERT ... ON CONFLICT DO NOTHING`,** with contention read from the
+  affected-row count rather than from a driver-specific constraint error code.
+- **Lock release detaches from the caller's context** (`context.WithoutCancel` plus a 10s
+  bound), because release usually happens while shutting down after SIGTERM.
+
+Known limitations, deliberate:
+
+- No `inget migrate`, `inget state show|gc|unlock` command. Step 7 wires migrate, step 13
+  owns the rest. `Store.Migrate` exists and is tested; nothing calls it outside tests.
+- A killed process leaves the sqlite lock row behind. `inget state unlock` (step 13) is the
+  answer; the postgres advisory lock has no such problem, which is one more reason postgres
+  is the default.
+- `PutFragments` and `EnqueueWork` write one prepared statement execution per row. For a
+  2000-fragment item on a remote database that is 2000 round trips inside one transaction.
+  If it shows up in step 9's timings, batch into multi-row `VALUES` — the statements are in
+  one place.
+- Nothing links `internal/state` yet, so the shipped binaries are still 5.1 MB. The first
+  command that touches state pays about 12 MB.
+
 ## Library decisions (approved, folded into D15)
 
 Approved 2026-08-01 and written into `feature-design.md` D15 and the corresponding plan
@@ -250,6 +359,10 @@ Pin these when the step that needs them lands, not before, so `go.mod` stays hon
 what is actually used. `doublestar` is already pinned: step 2 validates dependency globs
 with the same matcher step 5 will match with. `oklog/ulid/v2` landed with step 3, alongside
 `gocloud.dev` v0.46.0 and `klauspost/compress` v1.19.1, which D15 had already selected.
+Step 4 landed the three D15 had selected for the state store: `jackc/pgx/v5` v5.10.0,
+`modernc.org/sqlite` v1.55.0 and `pressly/goose/v3` v3.27.3. goose is used through its
+`NewProvider` API rather than its package-level globals, so two stores can migrate
+different dialects in one process.
 
 Deliberately kept in-tree:
 

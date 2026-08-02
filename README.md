@@ -13,11 +13,12 @@ index you can search in plain language, without re-paying for work that has not 
 Because the two are separate, a fetch failure never wastes model spend, and you can
 iterate on prompts against artifacts you already have — no re-fetching, no rate limits.
 
-> **Status: under construction.** Steps 1–3 of 14 in `docs/implementation-plan.md` are
+> **Status: under construction.** Steps 1–4 of 14 in `docs/implementation-plan.md` are
 > complete: the binaries build, report their version, load a validated layered
-> configuration, and the artifact envelope — content-addressed blob store, JSONL record
-> shards, manifests, the `_COMMIT` protocol — round-trips. No command writes or reads a
-> run yet; fetching and enrichment are not implemented.
+> configuration, the artifact envelope — content-addressed blob store, JSONL record
+> shards, manifests, the `_COMMIT` protocol — round-trips, and the state store persists
+> every level of the invalidation cascade on PostgreSQL or SQLite. No command writes or
+> reads a run yet; fetching and enrichment are not implemented.
 
 ## Install
 
@@ -94,6 +95,28 @@ anywhere:
 
 Logs are JSON on stderr; stdout carries program data only, so piping `--json` output
 stays safe. Nothing is written to log files.
+
+## State
+
+Nothing durable is kept on local disk. The `state` block chooses where the cascade's
+bookkeeping lives:
+
+```yaml
+state:
+  driver: postgres          # postgres | sqlite
+  dsn_env: INGET_STATE_DSN  # names the variable holding the connection string
+  # path: ./.inget/state.db # sqlite only
+```
+
+`postgres` is the default and the only one to run in production: it holds the per-datatype
+lock as a session advisory lock, so a killed pod releases it with no cleanup, and its
+schema lives in `inget_state` alongside the vector tables. `sqlite` exists for offline
+development — same behaviour, but its lock is a row, so a killed process leaves it behind.
+
+Two properties follow from this block. A second run over the same datatype exits
+immediately rather than duplicating work, which is what makes overlapping cron ticks safe.
+And progress is checkpointed per item, so a run interrupted 80% of the way through resumes
+at 80% instead of paying for the first 80% again.
 
 ## For developers
 

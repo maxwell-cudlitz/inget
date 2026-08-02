@@ -41,13 +41,13 @@ internal/config/      loading, precedence, validation, secret indirection, hashi
 internal/artifact/    envelope schema, manifest, shards, blob store [implemented]
 internal/source/      connector registry (github/, monday/)
 internal/delta/       reconciliation, hashing, signatures, glob scoping
-internal/state/       StateStore interface, postgres, sqlite
+internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      pipeline stages, llm + passthrough enrichers, composer, refs
 internal/model/       generator + embedder clients (OpenAI-compatible)
 internal/destination/ registry, pgvector
 internal/ratelimit/   adaptive limiter, header parsers
 internal/pipeline/    orchestration, worker pool, checkpointing, signals
-migrations/           goose SQL (state/, destination/)
+migrations/           goose SQL (state/, destination/), embedded  [state implemented]
 prompts/              text/template prompt files per datatype
 deploy/               docker-compose, k8s CronJob examples
 ```
@@ -72,6 +72,10 @@ across two mains.
 - Config keys come from `mapstructure` tags. Adding a scalar field makes it
   env-overridable automatically — `config.EnvKeys` walks the schema — so no registration
   list needs updating. Decoding is strict: unknown keys fail the load.
+- State SQL is written once for both drivers, with `?` placeholders and only the
+  intersection of PostgreSQL and SQLite syntax. Everything that differs is a field on
+  `state.dialect`. Statements go through the helpers in `internal/state/store.go`, never
+  straight to `*sql.DB`.
 - Tests are stdlib `testing`, table-driven, asserting behavior over implementation.
 - Dependencies are pinned in `go.mod` and must be pure Go so binaries cross-compile
   statically. Prefer stdlib; see D15 for the approved library set.
@@ -88,6 +92,16 @@ make fmt tidy clean
 
 `make build test lint` must be green before any step is considered done.
 
+The state conformance suite runs against sqlite alone unless a scratch PostgreSQL is
+pointed at. Both drivers, from a clean container:
+
+```bash
+docker run -d --rm --name inget-pg -e POSTGRES_PASSWORD=inget -e POSTGRES_DB=inget \
+  -p 55433:5432 postgres:17-alpine
+INGET_TEST_PG='postgres://postgres:inget@127.0.0.1:55433/inget?sslmode=disable' \
+  go test -race ./internal/state/...
+```
+
 ## Extension points
 
 Each of these is a registry plus an interface; adding an implementation should not
@@ -101,6 +115,11 @@ require touching the pipeline.
   contribute every input to its signature (D2) or the cascade will serve stale output.
 - **A destination**: implement the destination interface in `internal/destination/`,
   including `AssertModel` so an embedder change cannot silently corrupt an index (D7).
+- **A state driver**: add a `dialect` entry in `internal/state/dialect.go` and a migration
+  directory under `migrations/state/`. If the new dialect needs a fourth difference beyond
+  placeholders, row locking and lock strategy, add the field rather than a second
+  implementation of the statements — the conformance suite is what keeps the drivers
+  honest, and it only works while there is one implementation to test.
 
 ## Hazards
 
@@ -137,5 +156,21 @@ require touching the pipeline.
   21 MB adding `s3blob`, 39 MB with `gcsblob` as well). That is the price of one code path
   for three schemes; if a release needs to be small, drop an import there and accept that
   the matching URL scheme fails at open time.
+- **State store weight (`internal/state/drivers.go`).** Linking `internal/state` costs
+  about 12 MB of stripped binary, most of it modernc.org/sqlite. Both drivers are always
+  linked, because the driver is a configuration value.
+- **`RETURNING` order is unspecified.** `ClaimWork` sorts its result in Go. PostgreSQL
+  returns updated rows in whatever order the UPDATE touched them, not the subquery's
+  `ORDER BY`, and SQLite happens to agree with the subquery — so a test that trusted the
+  SQL alone passed on sqlite and failed on postgres.
+- **The advisory lock lives on a pinned connection (`internal/state/lock.go`).** A
+  PostgreSQL advisory lock belongs to a session, so `Lock` holds an `*sql.Conn` for the
+  lock's lifetime and hands it back only on release. Running the unlock through the pool
+  would unlock from whichever connection answered, which is not necessarily the one
+  holding it. Release detaches from the caller's context on purpose: a run releasing its
+  lock during SIGTERM handling has an already-cancelled context.
+- **State conformance runs against sqlite by default.** `INGET_TEST_PG` adds the postgres
+  half of the suite, and that run DROPs the `inget_state` schema of the database it names
+  before every case. A behaviour asserted only on sqlite is not asserted.
 - **Cost.** `inget plan` exists so no run spends money unexpectedly. Any change that can
   increase LLM calls must be visible there first.

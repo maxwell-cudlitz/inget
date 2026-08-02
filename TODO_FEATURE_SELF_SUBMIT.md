@@ -1,0 +1,1 @@
+Require generic binary for self-submission of data prerendered to a format to the given bucket

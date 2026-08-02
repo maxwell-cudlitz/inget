@@ -1,0 +1,118 @@
+// Package state persists every level of the invalidation cascade: item fingerprints,
+// fragment fingerprints, cached derivations, view input and embedding hashes, reference
+// edges, enricher signatures, run history and per-item work checkpoints.
+//
+// Nothing durable lives on local disk (D13). One Store interface has two drivers:
+// postgres, the default, and sqlite for offline development and tests. Both are reached
+// through database/sql — postgres via pgx's stdlib adapter over a pgxpool, sqlite via
+// modernc.org/sqlite — so the statements are written once and only three things vary by
+// dialect: placeholder syntax, the presence of SKIP LOCKED, and how a lock is held. Those
+// three live in dialect.go; every other file in this package is dialect-agnostic.
+//
+// Concurrency is guarded by Lock, which a run takes per datatype before it claims any
+// work. Progress is checkpointed per item in the work table, so an interrupted run resumes
+// where it stopped instead of restarting and paying for the same tokens twice.
+//
+// Timestamps are written by the database (DEFAULT CURRENT_TIMESTAMP) and no method returns
+// one. That is deliberate: SQLite has no timestamp type, so any timestamp crossing this
+// boundary would need per-dialect encoding for no current caller's benefit. `inget state
+// show` is where reading them starts to matter, and it can add typed accessors then.
+package state
+
+import "context"
+
+// Store is the persistence surface both binaries share. Every method is safe for
+// concurrent use; callers are expected to hold Lock for the datatype they mutate.
+type Store interface {
+	// Migrate brings the schema up to the embedded migration set. It is idempotent.
+	Migrate(ctx context.Context) error
+
+	// Close releases the connection pool. A held Lock is not released by Close; release
+	// it first.
+	Close() error
+
+	// Lock takes an exclusive, process-scoped lock on key, conventionally a datatype
+	// name. It does not block: a lock already held returns ErrLocked, which is how a
+	// CronJob that overlapped its predecessor exits cleanly instead of duplicating work.
+	Lock(ctx context.Context, key string) (release func() error, err error)
+
+	// ItemFingerprints returns item ID to level-0 fingerprint for every live item of a
+	// datatype. Tombstoned items are absent, so an item that reappears reconciles as
+	// added.
+	ItemFingerprints(ctx context.Context, datatype string) (map[string]string, error)
+
+	// Item returns one live item's persisted state. The bool reports whether it was
+	// found; a tombstoned item is reported as not found.
+	Item(ctx context.Context, datatype, itemID string) (Item, bool, error)
+
+	// PutItem upserts an item and clears any tombstone on it.
+	PutItem(ctx context.Context, datatype string, it Item) error
+
+	// Tombstone marks items deleted without removing their rows, so a subsequent run can
+	// still see what was collected and why. Only full-scope fetches issue tombstones.
+	Tombstone(ctx context.Context, datatype string, ids []string) error
+
+	// Fragments returns the persisted fragment set for one item, keyed by fragment key.
+	Fragments(ctx context.Context, datatype, itemID string) (map[string]FragmentState, error)
+
+	// PutFragments persists an item's complete fragment set as of this run. Fragments
+	// absent from f have their missing_runs counter incremented, which is what makes
+	// their derivations collectable after retention.missing_runs runs.
+	PutFragments(ctx context.Context, datatype, itemID string, f []FragmentState) error
+
+	// Derivation returns a cached fragment derivation and whether it was found, touching
+	// its last-hit timestamp.
+	Derivation(ctx context.Context, cacheKey string) (string, bool, error)
+
+	// PutDerivation caches one fragment derivation under its cache key.
+	PutDerivation(ctx context.Context, d Derivation) error
+
+	// ViewState returns the persisted views of one item, keyed by view name.
+	ViewState(ctx context.Context, datatype, itemID string) (map[string]ViewState, error)
+
+	// PutViewState upserts one view of one item.
+	PutViewState(ctx context.Context, datatype, itemID string, v ViewState) error
+
+	// PutRefs replaces the complete reference edge set of one item. Edges omitted from
+	// the call are removed, so a reference deleted from config stops invalidating.
+	PutRefs(ctx context.Context, from ItemKey, edges []RefEdge) error
+
+	// ReferencedBy returns the items whose references point at a key: the reverse edges
+	// the invalidation cascade walks when a referent changes (D12).
+	ReferencedBy(ctx context.Context, kind, key string) ([]ItemKey, error)
+
+	// Signature returns the last recorded signature for a scope, or "" when the scope has
+	// never been recorded. Absence is not an error: every scope is new once.
+	Signature(ctx context.Context, scope string) (string, error)
+
+	// PutSignature records the current signature for a scope.
+	PutSignature(ctx context.Context, scope, signature string) error
+
+	// StartRun records a run as running.
+	StartRun(ctx context.Context, r Run) error
+
+	// FinishRun closes a run with a terminal status and its statistics.
+	FinishRun(ctx context.Context, runID, status string, stats any) error
+
+	// ResumableRun returns the newest unfinished run matching binary, datatype and
+	// config hash, so a restarted process adopts its work queue instead of enqueueing a
+	// second copy. A changed config hash deliberately does not match: the work set that
+	// run computed may no longer be the right one.
+	ResumableRun(ctx context.Context, binary, datatype, configHash string) (string, bool, error)
+
+	// EnqueueWork adds items to a run's queue. Already-queued items are left untouched,
+	// so re-enqueueing on resume preserves what is already done.
+	EnqueueWork(ctx context.Context, runID, datatype string, ids []string) error
+
+	// ClaimWork claims up to n pending items for exclusive processing and returns their
+	// IDs in ascending order. Concurrent callers never receive the same item.
+	ClaimWork(ctx context.Context, runID, datatype string, n int) ([]string, error)
+
+	// ResetClaims returns claimed-but-uncompleted items to pending and reports how many.
+	// A run calls it after taking Lock: anything still claimed at that point belonged to
+	// a process that died, because the lock guarantees no live process holds it.
+	ResetClaims(ctx context.Context, runID, datatype string) (int, error)
+
+	// CompleteWork marks one item done, or failed with cause when cause is non-nil.
+	CompleteWork(ctx context.Context, runID, datatype, itemID string, cause error) error
+}
