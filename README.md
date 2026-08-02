@@ -93,6 +93,10 @@ destination, takes no lock and calls no model — and reports the fragment deriv
 generations, estimated tokens and cost a run would spend, plus any prompt or model change
 that has invalidated cached work. Its estimates are upper bounds.
 
+For a worked version of the above against real data — 50 popular but reasonably sized public
+repositories, chosen with the GitHub search API, then queried both through `inget query` and
+through `curl` plus `psql` — see [`docs/local-walkthrough.md`](docs/local-walkthrough.md).
+
 ### Fetching
 
 `inget-fetch` is one action, so it has no subcommand:

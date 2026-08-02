@@ -51,9 +51,18 @@ services:
   # on this path.
   #
   # TEI publishes one CPU image per host architecture and they are not multi-arch, so the
-  # tag has to match the machine: cpu-1.9 is x86_64, cpu-arm64-1.9 is aarch64. Override with
-  #   TEI_IMAGE_TAG=cpu-arm64-1.9 docker compose up
-  # On Apple Silicon prefer the Homebrew build instead — `brew install
+  # tag has to match the machine. x86_64 gets a version-pinned tag; aarch64 has no
+  # version-pinned CPU tag published at all — cpu-arm64-1.9 and cpu-arm64-1.8 do not
+  # exist — so the only option there is the moving cpu-arm64-latest, pinned by digest if you
+  # want reproducibility:
+  #
+  #   TEI_IMAGE_TAG=cpu-arm64-latest docker compose up
+  #   TEI_IMAGE_TAG=cpu-arm64-latest@sha256:35c50d7494de22deecdb783b8f5b7e1d05765709bd90071b03469b9440d28656 docker compose up
+  #
+  # Getting it wrong fails the pull with "no matching manifest for linux/arm64/v8", and since a
+  # failed pull aborts the whole `up`, postgres does not start either.
+  #
+  # On Apple Silicon prefer the Homebrew build regardless — `brew install
   # text-embeddings-inference`, then `text-embeddings-router --model-id
   # Qwen/Qwen3-Embedding-0.6B --port 8090`. TEI in a container has no Metal or MPS access,
   # so this service embeds on CPU cores only wherever it runs.

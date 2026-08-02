@@ -30,6 +30,11 @@ a socket; there is no server and no authentication surface.
 If an implementation detail contradicts the design, the design wins — or the design gets
 amended explicitly and the amendment is recorded in `docs/progress.md`.
 
+`docs/local-walkthrough.md` is a worked example rather than a contract: the compose stack, 50
+public repositories chosen with the GitHub search API, and the curl-plus-psql read path. It
+asserts observable behaviour — JSON field names, key layouts, SQL — so a change to any of those
+should update it.
+
 ## Layout
 
 ```

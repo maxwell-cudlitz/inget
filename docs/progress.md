@@ -1214,6 +1214,17 @@ TEI's CPU Docker images are per-architecture and not multi-arch (`cpu-1.9` is x8
 Homebrew route as preferred on Apple Silicon. Port 8090 rather than 8080 because a gluetun
 container holds 8080 on this machine.
 
+> **Corrected 2026-08-02.** `cpu-arm64-1.9` does not exist. Checked against the registry after
+> an `up -d` failed with `no matching manifest for linux/arm64/v8`: `cpu-1.9` publishes
+> linux/amd64 only, and no version-pinned aarch64 CPU tag is published at all — `cpu-arm64-1.9`,
+> `cpu-arm64-1.8`, `cpu-arm64-1.7` and `cpu-arm64` are all absent. The only aarch64 CPU tag is
+> the moving `cpu-arm64-latest`, whose index digest today is
+> `sha256:35c50d7494de22deecdb783b8f5b7e1d05765709bd90071b03469b9440d28656`; `name:tag@digest`
+> is valid in `TEI_IMAGE_TAG`, which is how to pin it. The compose comment and
+> `docs/local-walkthrough.md` were both fixed. Also worth knowing: a failed image pull aborts
+> the whole `up`, so a wrong tag leaves postgres down too, which reads like a broken compose
+> file rather than a bad tag.
+
 **Generator — DeepSeek V4 Flash, working.** `temperature: 0`, `seed` and
 `max_output_tokens: 1024` are all accepted; a two-sentence answer finished with
 `finish_reason: stop` at 73–109 completion tokens, of which 25 were reasoning tokens.
@@ -1621,3 +1632,38 @@ and notarization, which is not a decision a release step should make on its own.
   one by default, but a snapshot build pushes no attestations, so nothing here has confirmed it
   lands. Cosign with GitHub OIDC would add signing; it needs `id-token: write` and a decision
   about key policy, which is not this step's to make.
+
+### docs/local-walkthrough.md
+
+Added after the step's own commit: a front-to-back local run — compose stack, 50 popular but
+size-bounded public repositories, fetch, plan, run, eval, query — plus a curl read path. Three
+things in it are decisions rather than transcription:
+
+- **The corpus is chosen by `curl`, not by configuration.** The connector enumerates orgs,
+  explicit `owner/name` entries or `topic:` searches; it has no popularity ordering and does not
+  build arbitrary search qualifiers. So the walkthrough queries the search API for the ten
+  most-starred repositories in each of five languages and hands the result to `--only`. That
+  keeps configuration untouched, and `--only` marks the run partial so no tombstones are issued.
+- **`size:<20000` is load-bearing.** GitHub reports checkout size in kilobytes, and the bound is
+  what keeps every archive inside `limits.tarball_max_bytes`. Verified against the live API: the
+  per-language query returns 50 repositories with a maximum of about 20 MB. Sorting by stars
+  alone returns curated link lists — `awesome-*`, `build-your-own-x`, `public-apis` — in which
+  `stack`, `surface` and `operations` have nothing to read.
+- **"Commands over curl" is curl plus psql, because there is no server.** An HTTP surface is an
+  explicit non-goal, so the walkthrough curls the embedder for a query vector and hands it to the
+  same statement `Search` issues, including both `SET LOCAL` settings. The vector goes in as a
+  psql variable rather than interpolated text, and the section says plainly that this path skips
+  `AssertModel` — the one guard a hand-written query loses.
+
+Every JSON field, key layout and flag in it was read out of the source rather than recalled: the
+fetch `Result` tags, `Plan` and `Estimate`, the eval report, `query --json` (whose view field is
+`view`, not `view_name`), `state show`, the run directory layout (`runs/<source>/<datatype with
+/ flattened to _>/<ULID>`), and the rendered `halfvec(1024)` cast. At 289 lines it exceeds the
+250-line convention; it was reviewed and tightened twice, and splitting a front-to-back
+walkthrough into parts would defeat what it is for.
+
+The no-spend variant it documents (`enricher: passthrough`, `fragment_enricher.enabled: false`,
+`compose.max_chars: 8000`) is the answer to a question this step raised and could not otherwise
+settle: how to exercise the whole path on a real corpus without a generator bill. It lowers
+`max_chars` because passthrough embeds the composed document verbatim, and the shipped 120000
+characters is at or past the embedder's input limit.
