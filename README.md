@@ -34,8 +34,7 @@ make build       # -> bin/inget, bin/inget-fetch
 
 ## Usage
 
-The full command surface is specified in `docs/feature-design.md` and lands over the
-remaining implementation steps. Today:
+The full command surface is specified in `docs/feature-design.md`. Today:
 
 ```bash
 inget version
@@ -44,6 +43,9 @@ inget migrate            # create the state schema and the vector tables
 inget plan [datatype]    # what a run would do, and what it would cost
 inget run  [datatype]    # enrich, embed, upsert
 inget eval [datatype]    # score retrieval quality against the thresholds
+inget query "<text>"     # search the index and print the hits
+inget reindex [datatype] # re-embed stored views after an embedder change
+inget state show|gc|unlock
 
 inget-fetch              # enumerate a source and write an artifact run
 ```
@@ -60,6 +62,7 @@ inget-fetch --limit 20   # write a committed artifact run
 inget plan               # what would change, and what it would cost
 inget run                # enrich, embed, upsert
 inget eval               # did the result come out searchable?
+inget query "which repos handle terraform"
 ```
 
 `inget plan` before `inget run` is the point of the design: you see the number of LLM calls
@@ -148,6 +151,84 @@ sample itself, so scores are comparable across runs and across embedders at a fi
 `eval.sample_size`, but not between different sample sizes. An empty or single-item corpus
 is reported as unscorable and exits non-zero: it means `inget-fetch` and `inget run` have
 not populated anything to measure.
+
+### Searching
+
+`inget query` is the verification path, not an application API: it answers "is what I stored
+retrievable" without a psql session and a hand-written vector literal.
+
+```bash
+inget query "which repos handle terraform"                  # every datatype, merged by score
+inget query "terraform modules" --datatype github/repo --view stack
+inget query "python batch jobs" --limit 5 --json | jq '.[].item_id'
+```
+
+The query is embedded by the configured embedder, and every destination is checked against
+that embedder before it is searched. Searching an index built by another model returns
+rankings that look ordinary and mean nothing, so that check is a refusal rather than a
+warning.
+
+### Operations
+
+Two things go wrong that a re-run cannot fix, and there is a command for each.
+
+**The embedder changed.** A destination table is bound to one embedder, so every write is
+refused until the binding moves — and moving it means rewriting the rows the old model left.
+`inget reindex` does both. It re-embeds the view text already in state, so it needs no
+generator credentials, spends no generator tokens, and does not regenerate anything.
+
+```bash
+inget reindex                        # every datatype: rebind, re-embed, prune
+inget reindex github/repo            # one datatype
+inget reindex --view stack           # one view; no prune, since the others were skipped
+inget reindex --force                # rewrite even views already on this embedder
+```
+
+It claims per-item work rows, so an interrupted pass resumes where it stopped, and a second
+pass over an already-current index reports zero vectors written. When it finishes a complete
+pass it deletes the rows the new embedder never wrote — views you removed from config, items
+deleted while the old model was bound. A datatype with no stored views prunes nothing and
+says so: an empty state is a reason to run `inget run`, not a reason to empty the index.
+
+A prompt change is *not* a reindex. `inget run` regenerates a view whose enricher signature
+moved, and `inget plan` prices that before anything is spent.
+
+**Storage grows.** `inget state gc` performs the three-phase collection: run directories past
+`retention.runs` except the latest committed one, blobs no retained run and no live fragment
+references, then the derivations of fragments missing for more than `retention.missing_runs`
+runs.
+
+```bash
+inget state gc --dry-run   # report what would go
+inget state gc             # collect
+inget state show           # what each cascade level holds, plus recent runs
+inget state unlock github/repo
+```
+
+`gc` holds every datatype's locks while it runs, so it exits rather than racing a fetch or a
+run in progress — and for the same reason it takes no datatype argument: whether a blob is
+referenced is a question about every datatype at once. `state show` writes nothing and works
+even when the blob store is unreachable. `state unlock` only ever has something to remove on
+the sqlite driver; a postgres advisory lock is released by the server when its holder's
+connection drops, so a lock that is still held belongs to a live process and unlock says so.
+
+### Deploying
+
+`deploy/kubernetes/` has working examples: a ConfigMap and a placeholder Secret, hourly
+CronJobs for fetch, run and a weekly gc, and a one-shot Job for reindex.
+
+```bash
+kubectl apply -f deploy/kubernetes/base.yaml      # namespace, config, credential placeholders
+kubectl apply -f deploy/kubernetes/cronjobs.yaml  # fetch, run, gc
+kubectl apply -f deploy/kubernetes/reindex-job.yaml
+```
+
+Fill the Secret from your own secret management rather than committing values into it. Four
+settings in those manifests are load-bearing and the comments say why: `concurrencyPolicy:
+Forbid`, `backoffLimit: 0`, `restartPolicy: Never`, and a `terminationGracePeriodSeconds`
+long enough for SIGTERM to drain the items in flight. Neither binary listens on a socket, so
+there is nothing to authenticate against and no ingress to police; every credential is a
+Secret key named by configuration.
 
 ## Configuration
 
@@ -281,7 +362,9 @@ One consequence worth knowing before you point `inget` at a real index: a destin
 is bound to exactly one embedder, recorded in `inget_model_registry` and checked on every
 write. Vectors from two models occupy different spaces, so mixing them produces rankings
 that look ordinary and mean nothing. Changing `models.embedder` is therefore a reindex, not
-a config edit, and the error says so rather than letting the write through.
+a config edit, and the error says so rather than letting the write through — `inget reindex`
+is the one command allowed to move the binding, and it rewrites the rows the old model left
+before deleting whatever the new one never wrote.
 
 Steps 1–8 of the plan need no network access and no credentials, so most development runs
 entirely offline against fakes. Two suites are the exception. The destination tests need

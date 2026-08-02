@@ -8,7 +8,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +19,6 @@ import (
 	"github.com/maxwellcudlitz/inget/internal/cli"
 	"github.com/maxwellcudlitz/inget/internal/config"
 	"github.com/maxwellcudlitz/inget/internal/eval"
-	"github.com/maxwellcudlitz/inget/internal/state"
 )
 
 // evalOptions are the command's flags. The three embedder overrides exist together because a
@@ -112,15 +110,6 @@ func (o evalOptions) apply(cfg *config.Config) {
 			cfg.Models.Embedder.TruncateDims = 0
 		}
 	}
-}
-
-// openState opens the state store the harness reads from.
-func openState(ctx context.Context, cfg *config.Config) (state.Store, error) {
-	opts, err := state.FromConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return state.Open(ctx, opts)
 }
 
 // viewNames returns a datatype's configured view names, which is what coverage is measured

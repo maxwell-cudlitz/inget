@@ -7,7 +7,7 @@ import (
 
 func TestIsShuttingDownFalseByDefault(t *testing.T) {
 	ctx := context.Background()
-	if isShuttingDown(ctx) {
+	if ShuttingDown(ctx) {
 		t.Error("expected false when no shutdown channel is set")
 	}
 }
@@ -16,7 +16,7 @@ func TestIsShuttingDownTrueAfterClose(t *testing.T) {
 	ch := make(chan struct{})
 	ctx := WithShutdown(context.Background(), ch)
 	close(ch)
-	if !isShuttingDown(ctx) {
+	if !ShuttingDown(ctx) {
 		t.Error("expected true after shutdown channel is closed")
 	}
 }
@@ -24,7 +24,7 @@ func TestIsShuttingDownTrueAfterClose(t *testing.T) {
 func TestIsShuttingDownFalseBeforeClose(t *testing.T) {
 	ch := make(chan struct{})
 	ctx := WithShutdown(context.Background(), ch)
-	if isShuttingDown(ctx) {
+	if ShuttingDown(ctx) {
 		t.Error("expected false before shutdown channel is closed")
 	}
 }

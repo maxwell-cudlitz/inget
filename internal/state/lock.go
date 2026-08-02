@@ -35,6 +35,10 @@ const (
 
 	mutexLockSQL   = `INSERT INTO locks (lock_key, holder) VALUES (?, ?) ON CONFLICT (lock_key) DO NOTHING`
 	mutexUnlockSQL = `DELETE FROM locks WHERE lock_key = ? AND holder = ?`
+
+	// No holder predicate: the point of forcing is that the holder is gone and its token
+	// went with it.
+	mutexForceUnlockSQL = `DELETE FROM locks WHERE lock_key = ?`
 )
 
 // Lock implements Store.
@@ -114,6 +118,36 @@ func (s *store) mutexLock(ctx context.Context, key string) (func() error, error)
 // its lock, while still bounding how long the attempt may take.
 func releaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+}
+
+// ForceUnlock implements Store.
+//
+// Only SQLite can hold a stale lock, so only SQLite has a row to remove. PostgreSQL's
+// advisory lock lives in the holder's session and the server drops it when the connection
+// does, which means there is never anything to clean up and never anything to steal: if the
+// lock is held, a live session holds it. The probe below is how that is distinguished from
+// "nothing is locked", and it is deliberately not a pg_terminate_backend — killing another
+// process's session is not a decision this command should make on an operator's behalf.
+func (s *store) ForceUnlock(ctx context.Context, key string) (bool, error) {
+	if key == "" {
+		return false, errors.New("lock key is required")
+	}
+	if !s.d.advisory {
+		removed, err := s.exec(ctx, mutexForceUnlockSQL, key)
+		if err != nil {
+			return false, fmt.Errorf("force-unlocking %s: %w", key, err)
+		}
+		return removed > 0, nil
+	}
+
+	release, err := s.Lock(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("force-unlocking %s: %w", key, err)
+	}
+	if err := release(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // newHolder returns a token identifying one lock acquisition, so a release can only remove

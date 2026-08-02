@@ -36,6 +36,12 @@ type Store interface {
 	// CronJob that overlapped its predecessor exits cleanly instead of duplicating work.
 	Lock(ctx context.Context, key string) (release func() error, err error)
 
+	// ForceUnlock removes a lock no live process holds, reporting whether it removed one.
+	// It is the escape hatch behind `inget state unlock`, and it only ever has work to do
+	// on sqlite: a postgres advisory lock dies with its session, so a held one belongs to a
+	// running process and is reported as ErrLocked rather than taken away from it.
+	ForceUnlock(ctx context.Context, key string) (bool, error)
+
 	// ItemFingerprints returns item ID to level-0 fingerprint for every live item of a
 	// datatype. Tombstoned items are absent, so an item that reappears reconciles as
 	// added.
@@ -153,4 +159,23 @@ type Store interface {
 	// item: the guards claim that generation, embedding and upsert already happened, so
 	// they must not become visible unless the work row does too.
 	CheckpointItem(ctx context.Context, datatype string, cp Checkpoint) error
+
+	// LiveBlobRefs returns every blob digest a live fragment row points at, across every
+	// datatype. It is half of garbage collection's retention predicate: a blob is
+	// collectable only when no retained artifact run and no live fragment references it.
+	LiveBlobRefs(ctx context.Context) (map[string]struct{}, error)
+
+	// CollectDerivations deletes the cached derivations of fragments that have been absent
+	// for more than missingRuns runs, and reports how many it deleted. It is the one path
+	// that discards work already paid for, which is why the window is configuration
+	// (retention.missing_runs) rather than a constant.
+	CollectDerivations(ctx context.Context, missingRuns int) (int, error)
+
+	// Counts returns how many rows each cascade level holds for one datatype, for
+	// `inget state show`.
+	Counts(ctx context.Context, datatype string) (Counts, error)
+
+	// RecentRuns returns the newest runs, most recent first, optionally restricted to one
+	// datatype. It is the only read that returns a timestamp; see inspect.go.
+	RecentRuns(ctx context.Context, datatype string, limit int) ([]RunRecord, error)
 }

@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/maxwellcudlitz/inget/internal/artifact"
 	"github.com/maxwellcudlitz/inget/internal/delta"
@@ -195,41 +194,4 @@ func changedKeys(d delta.Delta) []string {
 	keys = append(keys, d.Modified...)
 	keys = append(keys, d.Deleted...)
 	return keys
-}
-
-// annotateMetadata is stage 8: the record's own metadata, the values any metadata-injected
-// reference resolved to, and the datatype's configured metadata_fields.
-//
-// A metadata_fields value naming ${references.*.resolved_keys} is expanded from the resolved
-// keys; the design's own example is exactly that, and those keys also reach the destination's
-// typed related_keys column, which is what makes them GIN-queryable. Any other "${...}" value
-// is an indirection nothing resolves, and is left out rather than written literally so that no
-// destination row carries an unexpanded placeholder as if it were data.
-func annotateMetadata(cfg DatatypeConfig, rec *artifact.Record, resolved refs.Resolution) map[string]string {
-	metadata := make(map[string]string, len(rec.Metadata)+len(cfg.MetadataFields)+len(resolved.Metadata))
-	for k, v := range rec.Metadata {
-		metadata[k] = v
-	}
-	for k, v := range resolved.Metadata {
-		metadata[k] = v
-	}
-	for k, v := range cfg.MetadataFields {
-		switch {
-		case !strings.Contains(v, "${"):
-			metadata[k] = v
-		case isResolvedKeysRef(v):
-			if len(resolved.RelatedKeys) > 0 {
-				metadata[k] = strings.Join(resolved.RelatedKeys, ",")
-			}
-		}
-	}
-	return metadata
-}
-
-// isResolvedKeysRef reports whether a metadata_fields value asks for the resolved reference
-// keys, in either the wildcard or the named form.
-func isResolvedKeysRef(value string) bool {
-	trimmed := strings.TrimSpace(value)
-	return strings.HasPrefix(trimmed, "${references.") &&
-		strings.HasSuffix(trimmed, ".resolved_keys}")
 }

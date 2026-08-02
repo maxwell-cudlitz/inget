@@ -120,6 +120,23 @@ func runAll(closers []func()) {
 // written, so a model or dimension mismatch fails at startup rather than after the first
 // item has been generated and paid for (D7).
 func openDestination(ctx context.Context, cfg *config.Config, name string, emb model.Embedder) (destination.Destination, error) {
+	sink, err := openDestinationUnbound(ctx, cfg, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := sink.AssertModel(ctx, emb.Model(), emb.Dims(), emb.Signature()); err != nil {
+		_ = sink.Close()
+		return nil, fmt.Errorf("asserting model on %s: %w", name, err)
+	}
+	return sink, nil
+}
+
+// openDestinationUnbound opens a destination without asserting the model binding.
+//
+// Only `inget reindex` uses it, and only because AssertModel is what it exists to get past: a
+// destination whose embedder changed refuses every write until the registry is rebound, so the
+// one command allowed to rebind cannot be required to assert first.
+func openDestinationUnbound(ctx context.Context, cfg *config.Config, name string) (destination.Destination, error) {
 	opts, err := destination.FromConfig(cfg, name)
 	if err != nil {
 		return nil, err
@@ -127,10 +144,6 @@ func openDestination(ctx context.Context, cfg *config.Config, name string, emb m
 	sink, err := destination.Open(ctx, opts)
 	if err != nil {
 		return nil, err
-	}
-	if err := sink.AssertModel(ctx, emb.Model(), emb.Dims(), emb.Signature()); err != nil {
-		_ = sink.Close()
-		return nil, fmt.Errorf("asserting model on %s: %w", name, err)
 	}
 	return sink, nil
 }

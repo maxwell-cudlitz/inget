@@ -82,6 +82,12 @@ func (d *testDest) Close() error                  { return nil }
 
 func (d *testDest) AssertModel(context.Context, string, int, string) error { return nil }
 
+func (d *testDest) RebindModel(context.Context, string, int, string) (bool, error) {
+	return false, nil
+}
+
+func (d *testDest) PruneStaleVectors(context.Context, string) (int, error) { return 0, nil }
+
 func (d *testDest) Upsert(_ context.Context, rows []destination.Row) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

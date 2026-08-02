@@ -52,7 +52,7 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 
 	final := stats.snapshot()
 	status := state.RunOK
-	if isShuttingDown(ctx) {
+	if ShuttingDown(ctx) {
 		// Partial failures leave the run ok: a failed item wrote no guards, so the next run
 		// reconciles it as changed and retries it. An interrupted drain is different — work
 		// is still queued, and this status is what tells the next run to adopt that queue
@@ -79,7 +79,7 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 func claimLoop(ctx context.Context, ex *execution, result *reconcileResult, g *errgroup.Group) error {
 	cfg := ex.deps.Config
 	for {
-		if isShuttingDown(ctx) {
+		if ShuttingDown(ctx) {
 			slog.InfoContext(ctx, "shutdown signalled, draining in-flight items",
 				"datatype", cfg.Name, "run_id", ex.runID)
 			return nil

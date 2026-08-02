@@ -29,7 +29,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 10 | Monday connector | not started (skipped ahead of 11) |
 | 11 | Reference resolution | **done** |
 | 12 | Quality harness | **done** |
-| 13 | Reindex and operations | not started |
+| 13 | Reindex and operations | **done** |
 | 14 | Release and documentation | not started |
 
 Sizing note: steps 5, 8, 9 and 10 carry more surface than one session should hold. Plan on
@@ -1365,3 +1365,141 @@ producing byte-identical text would otherwise have stored a garbage vector silen
 - **The Monday datatype is still unmeasured**, since step 10 has no connector, so nothing has
   exercised the harness against a `passthrough`-style corpus where the embedder does the
   semantic work — the case D14 says reporting per datatype exists for.
+
+## Step 13 record
+
+Implemented: `internal/gc` (three-phase collection, locking, dry run); `internal/artifact/gc.go`
+(`RunDirs`, `DeleteRun`, `Blobs`, `DeleteBlob`, `Run.BlobRefs`); `internal/state/gc.go`
+(`LiveBlobRefs`, `CollectDerivations`) and `internal/state/inspect.go` (`Counts`, `RecentRuns`,
+the only timestamp read in the package); `Store.ForceUnlock`; `internal/reindex` (rebind, resumable
+re-embed pass, prune); `destination.RebindModel` and `destination.PruneStaleVectors` with the
+pgvector implementations; `cmd/inget/reindex.go`, `cmd/inget/query.go`, `cmd/inget/state.go`
+(`show|gc|unlock`), all wired into `main.go`; `deploy/kubernetes/` (base, three CronJobs, a
+one-shot reindex Job). `pipeline.AnnotateMetadata` and `pipeline.ShuttingDown` were exported so
+reindex assembles row metadata and observes shutdown through the same code the pipeline uses,
+rather than a second copy of each.
+
+Verified: `gofmt -l .` clean, `go vet ./...` clean, `golangci-lint run` (v2.12.2) reports 0 issues,
+`go test -race -count=1 ./...` passes, `make build` produces both binaries, `go mod tidy` is a
+no-op — no new dependency was needed for this step. Both postgres-gated suites were run against
+`pgvector/pgvector:pg17` from `deploy/docker-compose.yaml`, which is what covers the new SQL:
+`internal/destination` (rebind, prune, the write path's reaction to a rebind) and the
+`internal/state` conformance suite on both drivers.
+
+The step's acceptance was then exercised live, with Qwen3-Embedding-0.6B under Homebrew TEI 1.9.3
+on Metal writing into that pgvector, over three seeded items with two views each and
+`truncate_dims: 256`:
+
+- Pass 1 embedded 6 views, bound the registry, and left every row and every `views` row carrying
+  `qwen3-embedding-0.6b` at 256 dims.
+- Pass 2 with the same configuration reported `items=0 unchanged=3 vectors=0` — a reindex is free
+  to retry.
+- `inget run` under a changed embedder refused with the D7 message naming `inget reindex`, which is
+  the deadlock the command exists to break.
+- Pass 3 under the changed embedder reported `rebound=[smoke] items=3 vectors=6`, and both the
+  table and `inget_model_registry` moved to the new model.
+- Deleting one `views` row then reindexing reported `vectors=5 pruned=1`: the orphan vector was the
+  one row the prune deleted.
+- `inget query` returned sensible rankings under both bindings (terraform query: 0.7402 on
+  `terraform-vpc/role`; python query after the rebind: 0.8159 on `etl-pipelines/role`).
+- `inget state gc --dry-run` completed against real advisory locks, and exited with
+  `lock is held by another process` while a `psql` session held `hashtext('github/repo')`.
+
+### Reindex re-embeds and does not regenerate
+
+The plan says "regenerate or re-embed as required". Reindex only re-embeds, and the regenerate half
+stays in `inget run`. The reason is that regeneration needs the artifact run — compose the
+fragments a view depends on, run the prompt, validate the output — which is stages 5 to 11 of the
+pipeline. That code exists, already detects a moved enricher signature through the level-2 guard,
+and already prices the work in `inget plan` before anything is spent. A second implementation of it
+inside reindex would have to open the artifact store, resolve references, hold the generator budget
+and account for cost, and would be the only path that spends generator tokens from a command whose
+whole point is that it does not.
+
+What reindex covers is the case `inget run` *cannot*: an embedder change makes the destination
+refuse every write until the registry is rebound, and `AssertModel` refuses to rebind by design.
+Nothing else can move that binding, and having moved it, the mover owes the index a rewrite. So the
+division is: reindex owns the model binding and the vectors, `run` owns the text.
+
+### Choices made where the plan was silent
+
+- **`state gc` takes no datatype argument.** Whether a blob is referenced is a claim about every
+  datatype at once, because content addressing shares blobs across datatypes and sources.
+  Collecting one datatype's runs would compute the retention set from that datatype alone and
+  delete blobs another still points at. The blob phase is therefore global, and the command's scope
+  is the whole configuration.
+- **Collection holds both locks of every datatype for its duration.** `<datatype>` is what a
+  pipeline run takes and `fetch:<datatype>` what a fetch takes, and the dangerous overlap is a
+  fetch that has uploaded blobs but not yet committed the manifest that references them. Holding
+  both makes "unreferenced" true for as long as it takes to act on it; the cost is that gc and a
+  run cannot overlap, which is the constraint every other writer here already accepts.
+- **Blobs of an uncommitted run directory are collectable.** Its records cannot be read, so there
+  is no way to know what it references. Deleting them is recoverable — the next fetch re-uploads
+  exactly what it needs, since `HasBlob` will miss — and the alternative is retaining the debris of
+  every crashed fetch forever. Phase 1 still retains young uncommitted directories, so the two
+  phases disagree on purpose.
+- **The prune is scoped by what the pass actually rewrote.** Full view scope, completed, at least
+  one item: anything less and the predicate "not written by the current binding" catches rows the
+  pass skipped rather than rows nothing wants. The empty-corpus case is the one worth stating: a
+  datatype with no stored views prunes nothing, because pruning there empties the table.
+  `--prune-unconfigured` is opt-in and demands a complete pass over every datatype, every view and
+  every destination.
+- **A second reindex pass is free, and `--force` is how you pay anyway.** A view whose stored
+  model, signature and embedded hash already match the configured embedder is skipped, which makes
+  the command safe to retry and safe to leave in a Job that might be re-applied. `--force` exists
+  for the case that guard gets wrong: a destination that lost rows while state still claims they
+  are current.
+- **Reindex runs record `inget-reindex` as their binary.** `ResumableRun` keys on binary, datatype
+  and config hash, so a distinct name is what stops a half-finished reindex from being adopted as a
+  resumable pipeline run and the reverse. They compute different work sets from the same datatype.
+- **Rows are written with `BulkLoad`, one call per batch.** The interface documents it as the
+  reindex path, and a batch's rows become one set-based merge rather than one statement per row.
+  Views are embedded per batch rather than per item for the same reason: one call, and the
+  embedder client's dedupe means a repeated text is sent once.
+- **The HNSW index is not dropped and rebuilt.** `migrations/destination/pgvector/00001_init.sql`
+  suggests reindex is where that happens, and it would be faster on a cold load, but the pass is
+  resumable and an interruption between the drop and the rebuild would leave a table with no vector
+  index and nothing to recreate it — goose has already applied that migration. A slower reindex is
+  better than an index that silently went missing.
+- **`state unlock` takes a datatype and releases both of its keys**, rather than taking a raw lock
+  key. The keys are an implementation detail of two packages; the thing an operator knows is which
+  datatype is stuck.
+- **`ForceUnlock` does not terminate a postgres backend.** An advisory lock cannot be stolen, only
+  outlived, so the postgres path probes the lock and reports `ErrLocked` if a live session holds it.
+  Killing another process's session on an operator's behalf is not a decision this command should
+  make, and there is no stale-lock case on that driver to justify it.
+- **`inget query` searches every configured datatype when none is named**, using each datatype's
+  first destination, and merges the hits by score. The design's own verification writes
+  `inget query "which repos handle terraform"` with no flags, which only works if a bare query
+  means something. Each search asserts the model binding first: a query vector from another model
+  is the one failure mode that produces plausible-looking nonsense.
+- **`state show` degrades when the blob store is unreachable.** The artifact store is opened for one
+  field per datatype — the newest committed run — so an unreachable bucket logs a warning and leaves
+  that field empty rather than failing the command. A diagnostic that needs everything to be
+  working is a diagnostic nobody can use when something is not.
+- **`Counts` is nine separate queries.** One statement with nine subselects would be one round trip
+  and considerably harder to read, and this is a command a human runs occasionally.
+
+### Known gaps
+
+- **Reference-injected metadata is not reproducible by a reindex.** `resolved.Metadata` is not
+  persisted — state holds the item's own metadata and the reference edges — so a rewritten row
+  carries item metadata, the configured `metadata_fields` and `related_keys`, but not the values an
+  `inject_as: metadata` reference resolved to. The pass warns once per datatype that declares one,
+  and `inget run` restores them the next time the item changes. Persisting the resolved payload in
+  the checkpoint would close this; it was not in scope here.
+- **No live gc against a populated store.** The phases are unit-tested against a real file:// store
+  with an aged ULID, and the lock behaviour was checked live, but nothing has run a collection over
+  a store with real runs and thousands of blobs. Watch the first real run with `--dry-run` and read
+  the retained/deleted counts before letting the CronJob delete anything.
+- **The Kubernetes manifests are unvalidated against an API server.** They parse, and the ConfigMap's
+  embedded `config.yaml` was loaded by the binary to prove it validates, but no cluster was available
+  to `kubectl apply --dry-run=server` them, and the image tag they name does not exist until step 14
+  publishes it.
+- **`state show` reports no work-queue detail.** It counts guards and lists recent runs, but not how
+  many `work` rows a run still has pending, which is what someone watching a long resume actually
+  wants. The rows are there; the read is not.
+- **Reindex is single-threaded across batches.** Items are claimed in batches and each batch is one
+  embedding call, but batches run in sequence, so a large corpus is bounded by embedder latency
+  rather than by throughput. The work-claiming design already supports several processes running the
+  pass at once, which is the cheaper way to fix it than a worker pool inside one.

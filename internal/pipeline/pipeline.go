@@ -146,8 +146,10 @@ func WithShutdown(ctx context.Context, ch <-chan struct{}) context.Context {
 	return context.WithValue(ctx, shutdownKey, ch)
 }
 
-// isShuttingDown reports whether a shutdown has been signalled on ctx.
-func isShuttingDown(ctx context.Context) bool {
+// ShuttingDown reports whether a shutdown has been signalled on ctx. It is exported because
+// `inget reindex` observes the same channel through the same context: both are long passes over
+// a work queue that must stop claiming and drain rather than die mid-item.
+func ShuttingDown(ctx context.Context) bool {
 	ch, ok := ctx.Value(shutdownKey).(<-chan struct{})
 	if !ok {
 		return false

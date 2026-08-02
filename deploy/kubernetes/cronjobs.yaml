@@ -1,0 +1,201 @@
+# Scheduled operation: fetch, enrich, and collect.
+#
+# Four settings appear on every job here, and each of them is load-bearing rather than
+# conventional:
+#
+#   concurrencyPolicy: Forbid       The CronJob controller may create two Jobs for one tick, or
+#                                   none. Forbid removes the common case; the state store's
+#                                   per-datatype lock removes the rest, exiting the loser cleanly
+#                                   instead of paying twice for the same tokens (D13).
+#   backoffLimit: 0                 A failed run must not be retried by the Job controller. Work is
+#                                   checkpointed per item, so the next scheduled run resumes from
+#                                   where this one stopped — an immediate retry would race the
+#                                   lock the dying pod may still hold and add nothing.
+#   restartPolicy: Never            Same reason, one level down: a restarted container would begin
+#                                   again inside a Job that has already recorded an attempt.
+#   terminationGracePeriodSeconds   SIGTERM stops new claims and drains in-flight items, then the
+#                                   run is marked interrupted. The default 30s is far too short for
+#                                   an item that is mid-generation, and a SIGKILL there costs the
+#                                   tokens already spent on it.
+#
+# Every pod is read-only, non-root and unprivileged. The binaries write nothing to disk: logs go to
+# stderr, artifacts to object storage, state to PostgreSQL.
+---
+# Fetch: enumerate the source and write a committed artifact run. Holds the source token; holds no
+# model credentials and writes no vectors.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: inget-fetch-github
+  namespace: inget
+spec:
+  schedule: "17 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  # A controller outage should not replay every missed tick: one late start, then wait for the next
+  # schedule. Fetch is incremental, so nothing is lost by skipping.
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # A fetch that has not finished in four hours is stuck on something a longer wait will not
+      # fix, and the next tick starts clean.
+      activeDeadlineSeconds: 14400
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: inget, app.kubernetes.io/component: fetch}
+        spec:
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 600
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: fetch
+              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              imagePullPolicy: IfNotPresent
+              command: ["/usr/local/bin/inget-fetch"]
+              args: ["--source", "github", "--datatype", "github/repo"]
+              env:
+                - {name: INGET_CONFIG, value: /etc/inget/config.yaml}
+                - {name: LOG_FORMAT, value: json}
+                - {name: LOG_LEVEL, value: info}
+              envFrom:
+                - secretRef: {name: inget-credentials}
+              volumeMounts:
+                - {name: config, mountPath: /etc/inget, readOnly: true}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              resources:
+                requests: {cpu: 250m, memory: 512Mi}
+                # A tarball is extracted in memory, so the ceiling is per-repository size times
+                # limits.max_concurrent rather than anything proportional to the org.
+                limits: {memory: 2Gi}
+          volumes:
+            - name: config
+              configMap: {name: inget-config}
+---
+# Enrich: read the latest committed run, walk the cascade, embed and upsert. Holds the model and
+# database credentials; holds no source token.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: inget-run
+  namespace: inget
+spec:
+  # Half an hour after the fetch, so a long enumeration is finished before the pipeline reads it.
+  # It is not a dependency: an unfinished fetch has no _COMMIT and is invisible, so the pipeline
+  # reads the previous run and does nothing.
+  schedule: "47 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: inget, app.kubernetes.io/component: run}
+        spec:
+          restartPolicy: Never
+          # An hour: long enough for the in-flight items of a generator-bound run to finish, and
+          # the run marks itself interrupted before the grace period expires.
+          terminationGracePeriodSeconds: 3600
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: run
+              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              imagePullPolicy: IfNotPresent
+              command: ["/usr/local/bin/inget"]
+              args: ["run", "github/repo"]
+              env:
+                - {name: INGET_CONFIG, value: /etc/inget/config.yaml}
+                - {name: LOG_FORMAT, value: json}
+                - {name: LOG_LEVEL, value: info}
+              envFrom:
+                - secretRef: {name: inget-credentials}
+              volumeMounts:
+                - {name: config, mountPath: /etc/inget, readOnly: true}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              resources:
+                requests: {cpu: 500m, memory: 512Mi}
+                limits: {memory: 2Gi}
+          volumes:
+            - name: config
+              configMap: {name: inget-config}
+---
+# Collect: retire old runs, unreferenced blobs and cold derivations.
+#
+# It takes every datatype's locks for its whole duration, so it must not overlap a fetch or a run —
+# hence a weekly slot in the gap between the hourly schedules above. If it ever does overlap, it
+# exits on the lock rather than racing.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: inget-gc
+  namespace: inget
+spec:
+  schedule: "5 3 * * 0"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: inget, app.kubernetes.io/component: gc}
+        spec:
+          restartPolicy: Never
+          # Collection deletes objects one at a time and is safe to interrupt — an unfinished pass
+          # leaves objects that the next pass collects — so it needs only enough grace to finish
+          # the deletion in flight.
+          terminationGracePeriodSeconds: 120
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: gc
+              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              imagePullPolicy: IfNotPresent
+              command: ["/usr/local/bin/inget"]
+              # Start with --dry-run in a new deployment and read the counts for a cycle or two
+              # before letting it delete anything.
+              args: ["state", "gc"]
+              env:
+                - {name: INGET_CONFIG, value: /etc/inget/config.yaml}
+                - {name: LOG_FORMAT, value: json}
+                - {name: LOG_LEVEL, value: info}
+              envFrom:
+                - secretRef: {name: inget-credentials}
+              volumeMounts:
+                - {name: config, mountPath: /etc/inget, readOnly: true}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              resources:
+                requests: {cpu: 100m, memory: 256Mi}
+                limits: {memory: 1Gi}
+          volumes:
+            - name: config
+              configMap: {name: inget-config}

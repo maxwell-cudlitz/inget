@@ -1,0 +1,141 @@
+# Namespace, configuration and credentials for the CronJobs in cronjobs.yaml.
+#
+# Nothing here listens on a socket. Both binaries are batch processes that connect out to
+# PostgreSQL, the blob store and the model endpoints, so there is no server to authenticate
+# against and no NetworkPolicy ingress rule to write. What does matter is the other direction:
+# every credential is a Secret key, named by configuration rather than embedded in it, and the
+# ConfigMap below is safe to commit because it contains no secret values at all.
+#
+# Apply order:
+#   kubectl apply -f base.yaml
+#   kubectl apply -f cronjobs.yaml
+#
+# The Secret in this file is a placeholder with empty values. Replace it with your own secret
+# management — External Secrets, Secrets Store CSI, sealed-secrets — rather than filling it in and
+# committing it.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inget
+---
+# The base configuration, mounted read-only at /etc/inget/config.yaml. It is the repository's
+# config.yaml with the endpoints and the artifact store pointed at cluster addresses; keep the two
+# in sync by generating this from the file rather than editing both.
+#
+# Layering still applies inside the pod: environment variables beat this file, so a per-CronJob
+# override needs no second ConfigMap. INGET_MODELS__EMBEDDER__MODEL, for instance, changes the
+# embedder for one job without touching the mounted configuration.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inget-config
+  namespace: inget
+data:
+  config.yaml: |
+    version: 1
+
+    log:
+      level: info
+      format: json
+      destination: stderr
+
+    # Object storage, not a volume: artifacts outlive any pod and two jobs read the same runs.
+    artifacts:
+      url: "s3://inget-artifacts/prod"
+      shard_target_bytes: 134217728
+      blob_max_bytes: 1048576
+      max_fragments_per_item: 2000
+      compression: zstd
+
+    retention:
+      runs: 30d
+      missing_runs: 3
+
+    enrich:
+      max_reference_depth: 2
+      max_cascade_per_run: 5000
+
+    eval:
+      sample_size: 20
+
+    state:
+      driver: postgres
+      dsn_env: INGET_STATE_DSN
+
+    models:
+      generator:
+        driver: openai
+        base_url: "http://litellm.inget.svc.cluster.local:4000/v1"
+        model: "deepseek-v4-flash"
+        api_key_env: INGET_GENERATOR_API_KEY
+        concurrency: 8
+        timeout: 120s
+        temperature: 0
+        seed: 1
+        max_output_tokens: 512
+        max_input_chars: 120000
+        price_per_mtok_in: 0.028
+        price_per_mtok_out: 0.042
+      embedder:
+        driver: openai
+        base_url: "http://tei.inget.svc.cluster.local:8080/v1"
+        model: "Qwen/Qwen3-Embedding-0.6B"
+        dimensions: 1024
+        batch_size: 64
+        concurrency: 4
+        timeout: 60s
+
+    destinations:
+      - name: pgvector
+        driver: pgvector
+        dsn_env: INGET_PGVECTOR_DSN
+        table: inget_vectors
+        storage: halfvec
+        hnsw: {m: 16, ef_construction: 64}
+        ef_search: 100
+        granularity: item
+        batch_size: 500
+
+    sources:
+      - name: github
+        driver: github
+        auth:
+          token_env: INGET_GITHUB_TOKEN
+          api_url: "https://api.github.com"
+        domain:
+          orgs: ["your-org"]
+        limits:
+          max_concurrent: 8
+
+    datatypes:
+      - name: github/repo
+        source: github
+        enricher: llm
+        destinations: [pgvector]
+        fragment_enricher:
+          enabled: true
+          prompt: prompts/github/repo/fragment.md
+          max_input_chars: 40000
+        compose: {order: tier, max_chars: 120000}
+        metadata_fields:
+          related_keys: "${references.*.resolved_keys}"
+        views:
+          - {name: role, prompt: prompts/github/repo/role.md, depends_on: ["**"]}
+---
+# Placeholder credentials. Every key is named by the configuration above, so rotating one is a
+# Secret update and a restart, not a config change.
+#
+# stringData is empty on purpose: an empty value fails at load with the variable's name, which is a
+# better first run than a 401 twenty minutes in.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: inget-credentials
+  namespace: inget
+type: Opaque
+stringData:
+  INGET_STATE_DSN: ""
+  INGET_PGVECTOR_DSN: ""
+  INGET_GENERATOR_API_KEY: ""
+  INGET_GITHUB_TOKEN: ""

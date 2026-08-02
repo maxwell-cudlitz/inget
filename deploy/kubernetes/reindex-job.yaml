@@ -1,0 +1,73 @@
+# One-shot reindex: rebuild the index after an embedder change.
+#
+# This is a Job rather than a CronJob because it is a response to a decision. The sequence is:
+#
+#   1. Change models.embedder in the ConfigMap and apply it.
+#   2. Suspend the hourly run so it does not compete for the datatype lock:
+#        kubectl -n inget patch cronjob inget-run -p '{"spec":{"suspend":true}}'
+#   3. kubectl apply -f reindex-job.yaml
+#   4. Watch it: kubectl -n inget logs -f job/inget-reindex
+#   5. Resume the run when the Job completes.
+#
+# Step 2 is optional but saves noise: the run would exit on the lock rather than corrupt anything,
+# and every tick it does that is a failed Job in the history.
+#
+# The Job is safe to re-apply after deleting it. A pass that already rewrote a view costs nothing
+# the second time, and an interrupted pass adopts its own unfinished run and continues.
+#
+# What this does not do is regenerate. If the prompts changed rather than the embedder, `inget run`
+# is the command: its cascade detects the signature change and `inget plan` prices it first.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inget-reindex
+  namespace: inget
+spec:
+  backoffLimit: 0
+  # Two days. A reindex over a large corpus is embedder-bound, and being killed by a deadline
+  # mid-pass is recoverable but pointless.
+  activeDeadlineSeconds: 172800
+  # Removes the Job an hour after it finishes, so a later re-apply does not collide with an
+  # immutable completed Job.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: inget, app.kubernetes.io/component: reindex}
+    spec:
+      restartPolicy: Never
+      # As long as the run's: the pass finishes the batch in flight, marks the run interrupted, and
+      # the next apply resumes it.
+      terminationGracePeriodSeconds: 3600
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: reindex
+          image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/inget"]
+          # No datatype argument: every configured datatype sharing the destination has to move to
+          # the new embedder together, because the table is bound to one model (D7). Add
+          # --view <name> only when a single view's vectors need rebuilding under the same model.
+          args: ["reindex"]
+          env:
+            - {name: INGET_CONFIG, value: /etc/inget/config.yaml}
+            - {name: LOG_FORMAT, value: json}
+            - {name: LOG_LEVEL, value: info}
+          envFrom:
+            - secretRef: {name: inget-credentials}
+          volumeMounts:
+            - {name: config, mountPath: /etc/inget, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {memory: 2Gi}
+      volumes:
+        - name: config
+          configMap: {name: inget-config}

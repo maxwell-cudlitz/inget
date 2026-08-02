@@ -1,15 +1,26 @@
-// Enricher and model-client builders, plus plan reporting.
+// Shared entrypoint helpers: the enricher and model-client builders, the config, datatype and
+// state-store resolution every command starts with, and the two output paths (plan reporting and
+// JSON on stdout).
+//
+// Anything used by more than one subcommand belongs here rather than in whichever file happened to
+// need it first, so that a new command does not reimplement datatype selection or print its output
+// somewhere other than stdout.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 
+	"github.com/spf13/cobra"
+
+	"github.com/maxwellcudlitz/inget/internal/cli"
 	"github.com/maxwellcudlitz/inget/internal/config"
 	"github.com/maxwellcudlitz/inget/internal/enrich"
 	"github.com/maxwellcudlitz/inget/internal/model"
 	"github.com/maxwellcudlitz/inget/internal/pipeline"
+	"github.com/maxwellcudlitz/inget/internal/state"
 )
 
 // buildViewEnrichers creates an enricher per view based on the datatype's enricher type.
@@ -164,4 +175,42 @@ func reportPlan(plan *pipeline.Plan) error {
 	}
 	fmt.Println(string(data))
 	return nil
+}
+
+// stateSetup loads configuration, resolves the datatype argument and opens the state store. The
+// three commands differ in what they do next, not in how they start.
+func stateSetup(cmd *cobra.Command, args []string) (*config.Config, state.Store, []config.Datatype, error) {
+	cfg, err := config.Load(cli.ConfigPath(cmd))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("loading configuration: %w", err)
+	}
+	datatypes, err := selectDatatypes(cfg, args)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	store, err := openState(cmd.Context(), cfg)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return cfg, store, datatypes, nil
+}
+
+// printJSON writes a value as indented JSON on stdout, which is where program output belongs.
+func printJSON(v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling output: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+// openState opens the state store. Every command that reads state goes through it, so the
+// options bridge is resolved in one place.
+func openState(ctx context.Context, cfg *config.Config) (state.Store, error) {
+	opts, err := state.FromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return state.Open(ctx, opts)
 }

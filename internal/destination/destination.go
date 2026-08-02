@@ -47,6 +47,21 @@ type Destination interface {
 	// mixing vector spaces.
 	AssertModel(ctx context.Context, model string, dims int, signature string) error
 
+	// RebindModel replaces the binding and reports whether it changed. It is the one thing
+	// AssertModel refuses to do, and `inget reindex` is the only caller: a destination whose
+	// embedder changed accepts no write at all until the registry is rebound, so rebinding is
+	// what breaks that deadlock. Every row still carrying the previous model is stale from the
+	// moment it returns, which is why the reindex pass that follows is not optional.
+	RebindModel(ctx context.Context, model string, dims int, signature string) (bool, error)
+
+	// PruneStaleVectors deletes the rows whose model, dimensions or signature disagree with
+	// the current binding, optionally restricted to one datatype, and reports how many it
+	// deleted. After a reindex has rewritten everything state knows about, what remains is
+	// what state does not: views removed from configuration and items deleted while the old
+	// model was bound. Leaving them would mix two vector spaces in one index, which is the
+	// outcome D7 exists to prevent.
+	PruneStaleVectors(ctx context.Context, datatype string) (int, error)
+
 	// Upsert writes rows, replacing any that already exist. This is the incremental path:
 	// the cascade only reaches it for views that materially changed.
 	Upsert(ctx context.Context, rows []Row) error

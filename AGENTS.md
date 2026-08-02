@@ -33,12 +33,12 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 ## Layout
 
 ```
-cmd/inget/            enrichment entrypoint: migrate, run, plan, eval   [implemented]
+cmd/inget/            enrichment entrypoint: migrate, run, plan, eval, reindex, query, state [implemented]
 cmd/inget-fetch/      fetch entrypoint; fetching is the root command's own action [implemented]
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
 internal/config/      loading, precedence, validation, secret indirection, hashing [implemented]
-internal/artifact/    envelope schema, manifest, shards, blob store [implemented]
+internal/artifact/    envelope schema, manifest, shards, blob store, collection primitives [implemented]
 internal/source/      connector interface + registry (github/ [implemented], monday/)
 internal/fetch/       fetch orchestration: level-0 skip, worker pool, tombstones, commit [implemented]
 internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
@@ -46,13 +46,15 @@ internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      enricher interface, llm + passthrough + fragment enrichers, prompts [implemented]
 internal/enrich/refs/ reference resolvers (inget, http), key extraction, invalidation cascade [implemented]
 internal/eval/        quality harness: sampling, five metrics, per-view report [implemented]
+internal/gc/          three-phase collection: runs, blobs, derivations [implemented]
+internal/reindex/     re-embed stored view text under a new embedder, resumably [implemented]
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   Limiter interface, header parsers, github limiter [implemented]
 internal/pipeline/    orchestration, worker pool, checkpointing, signals [implemented]
 migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
-deploy/               docker-compose  [implemented], k8s CronJob examples
+deploy/               docker-compose [implemented], kubernetes/ CronJobs + reindex Job [implemented]
 ```
 
 `internal/cli` is an addition to the layout in the design document: both binaries need
@@ -147,6 +149,22 @@ text-embeddings-router --model-id Qwen/Qwen3-Embedding-0.6B --port 8090 --hostna
 INGET_TEST_EMBEDDER_URL=http://127.0.0.1:8090/v1 go test -race ./internal/eval/ -run TestLive -v
 ```
 
+`inget reindex` has no automated live case, because the thing worth verifying is a real
+embedder writing into a real pgvector. Do it by hand when changing anything in
+`internal/reindex` or the two new destination methods: seed `inget_state.items` and
+`inget_state.views` with a few rows of text, `inget migrate`, then
+
+```bash
+inget reindex github/repo                                     # fills the index, rebinds
+inget reindex github/repo                                     # must report 0 vectors written
+INGET_MODELS__EMBEDDER__MODEL=other inget run github/repo     # must refuse, naming reindex
+INGET_MODELS__EMBEDDER__MODEL=other inget reindex github/repo # rebinds and rewrites everything
+```
+
+and check that every row of the table carries the new model and that `inget_model_registry`
+agrees. Deleting one `views` row before the last pass is how the prune gets exercised: the
+orphan vector should be the one row it deletes.
+
 ## Extension points
 
 Each of these is a registry plus an interface; adding an implementation should not
@@ -173,7 +191,10 @@ require touching the pipeline.
   that feeds a model something nobody reviewed. It needs no signature: the payload digest in
   `internal/enrich/refs/digest.go` already covers what it returned.
 - **A destination**: implement the destination interface in `internal/destination/`,
-  including `AssertModel` so an embedder change cannot silently corrupt an index (D7).
+  including `AssertModel` so an embedder change cannot silently corrupt an index (D7), plus
+  `RebindModel` and `PruneStaleVectors`, which are what `inget reindex` needs to get past that
+  same check deliberately. A driver that implements `AssertModel` and not the other two makes
+  an embedder change unrecoverable for it.
 - **A state driver**: add a `dialect` entry in `internal/state/dialect.go` and a migration
   directory under `migrations/state/`. If the new dialect needs a fourth difference beyond
   placeholders, row locking and lock strategy, add the field rather than a second
@@ -376,9 +397,17 @@ require touching the pipeline.
   discard paid-for tokens.
 - **The shutdown channel belongs to the signal handler (`internal/pipeline/workers.go`).**
   `runWorkers` reads it from the context the caller wired to `NotifyShutdown`. A pool that
-  creates its own channel compiles, passes every test that calls `isShuttingDown` directly,
+  creates its own channel compiles, passes every test that calls `ShuttingDown` directly,
   and never drains on SIGTERM, because nothing ever closes the channel it is watching.
-  `TestInterruptedRunResumesWithoutDuplicatingWork` is the regression guard.
+  `TestInterruptedRunResumesWithoutDuplicatingWork` is the regression guard. `ShuttingDown` is
+  exported because `inget reindex` observes the same channel through the same context.
+- **Row metadata is assembled in one place (`internal/pipeline/metadata.go`).**
+  `AnnotateMetadata` is exported because two callers must agree on it exactly: the pipeline
+  writing a row and `inget reindex` rewriting that row from state. A reindex that assembled
+  metadata differently would quietly change what a metadata filter matches, and the only symptom
+  would be search results that used to be there. The one part reindex cannot reproduce is a
+  metadata-injected reference payload, which is not persisted; the pass logs that once per
+  datatype that declares one, and `inget run` restores those values on the item's next change.
 - **Views compose their own scope (`internal/pipeline/views.go`).** Each view is composed
   over only the fragments its `depends_on` globs match, via `delta.MatchesAny`. Composing the
   whole item once and handing it to every view puts a repository's entire contents in front of
@@ -419,3 +448,56 @@ require touching the pipeline.
   dry-run mode calls `estimateWork`. Signature changes are surfaced on both paths, at one
   query per view. Estimates are upper bounds: the level-2 guard can still skip a view whose
   scoped composition turns out unchanged, and that cannot be known without deriving.
+- **`inget reindex` re-embeds and never regenerates (`internal/reindex/`).** The text in
+  `state.views.text` is by definition what each stored vector was made from, so an embedder
+  change needs no generator, no artifacts and no tokens. A *prompt* change is the other
+  direction — it changes what the text should say — and belongs to `inget run`, whose cascade
+  already regenerates a view whose enricher signature moved and whose cost `inget plan` reports
+  first. Adding generation here would be a second implementation of stages 5–11 with no
+  artifacts to read, and it would spend money from a command nobody expects to.
+- **Reindex is the only caller allowed to rebind, and rebinding is why it exists
+  (`internal/destination/pgvector_rebind.go`).** `AssertModel` refuses a disagreement on
+  purpose, which means an embedder change stops *every* write until the registry moves — that
+  deadlock is what `RebindModel` breaks. Between the rebind and the end of the pass the table
+  holds two vector spaces; that window is unavoidable, so the rebind logs at warn level and the
+  pass that follows is not optional. `cmd/inget/reindex.go` opens destinations with
+  `openDestinationUnbound` for the same reason; no other command may.
+- **The prune deletes by "not written by the current binding", so its scope is load-bearing
+  (`internal/reindex/pass.go`).** It runs only after a full-scope pass that completed: a
+  view-restricted pass would delete the views it deliberately skipped, and an interrupted one
+  would delete the items it had not reached yet. A datatype with no stored views prunes nothing
+  at all and says so — pruning there would empty the table because state is empty, which is a
+  second outage rather than a recovery. `--prune-unconfigured` is the only way to reach rows of
+  datatypes configuration no longer declares, and it demands a complete pass over everything.
+- **Reindex records its own binary name (`internal/reindex/reindex.go`).** Run rows are keyed
+  by `inget-reindex`, not `inget`, so a half-finished reindex is never adopted as a resumable
+  pipeline run or the reverse. The two compute different work sets from the same datatype, and
+  adopting one for the other would silently skip whatever the other had already marked done.
+- **Collection order is the correctness argument, and it holds every lock
+  (`internal/gc/`).** Runs first, then blobs, then derivations: a blob's retention predicate is
+  "no retained run and no live fragment references it", so computing it against directories that
+  are about to disappear keeps their blobs alive for another cycle. Collection takes both locks
+  of every datatype — `<datatype>` and `fetch:<datatype>` — because "unreferenced" is a global
+  claim and a fetch that has uploaded blobs but not yet committed its manifest would otherwise
+  have them collected out from under it. That is also why `state gc` takes no datatype argument:
+  collecting one datatype's runs would delete blobs another still points at.
+- **An uncommitted run directory contributes no retained blobs (`internal/gc/phases.go`).**
+  Its records cannot be read, so what a dead fetch left behind is collected. That is correct and
+  recoverable — content addressing means the next fetch re-uploads exactly what it needs — but
+  it is a deliberate asymmetry with phase 1, which does retain young uncommitted directories.
+- **`_COMMIT` is deleted first (`internal/artifact/gc.go`).** Deleting a run directory mirrors
+  the commit protocol in reverse, so an interrupted deletion leaves a directory every consumer
+  already ignores rather than a committed run whose shards have started disappearing. `Blobs`
+  also skips any object under `blobs/` whose name is not a digest: a shared store may hold
+  things that are not ours to collect.
+- **`state show` is the only read that returns a timestamp (`internal/state/inspect.go`).**
+  PostgreSQL stores `timestamptz` and SQLite stores `CURRENT_TIMESTAMP` text, so the columns are
+  scanned untyped and normalized by `asTime` rather than by a second set of statements. Do not
+  add a timestamp to any other method: every guard is compared for inequality and run history is
+  ordered by ULID, so nothing else needs one.
+- **`ForceUnlock` cannot steal a postgres lock, and that is the answer rather than a gap
+  (`internal/state/lock.go`).** An advisory lock lives in its holder's session and dies with it,
+  so a held one belongs to a live process; `state unlock` probes and reports `ErrLocked` instead
+  of terminating the backend. Only sqlite has a stale row to remove. Relatedly, `Store.Close`
+  blocks while a lock is held, because the lock pins a connection — release before closing, in
+  tests as well as in commands.
