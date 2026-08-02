@@ -26,6 +26,15 @@ linters:
         - errors.Join(
         - .Wrap(
         - .Wrapf(
+      # wrapcheck's premise is that an error crossing a package boundary carries no context
+      # about what failed. That is true of third-party code and false of this module's own
+      # packages: each wraps at its own boundary, and their messages are asserted by tests
+      # ("migrating postgres state store: ...", "binding destination inget_vectors to ...").
+      # Wrapping those a second time in a caller repeats the same phrase rather than adding
+      # anything, so an entrypoint assembling them is exempt. Errors from outside the module
+      # are still checked everywhere.
+      ignore-package-globs:
+        - github.com/maxwellcudlitz/inget/internal/*
   exclusions:
     generated: lax
     rules:

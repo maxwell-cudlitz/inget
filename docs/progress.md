@@ -23,7 +23,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 4 | State store | **done** |
 | 5 | Delta engine | **done** |
 | 6 | Model clients | **done** |
-| 7 | pgvector destination | not started |
+| 7 | pgvector destination | **done** |
 | 8 | Enrichment pipeline | not started |
 | 9 | GitHub connector | not started |
 | 10 | Monday connector | not started |
@@ -586,3 +586,118 @@ API changes later steps must account for:
 
 Backoff bounds in `retry.go` are now variables so tests can shrink the clock; the package
 suite dropped from 9.2s to 2.1s. They are written only by tests.
+
+## Step 7 record
+
+Implemented: `internal/destination`, the vector sink surface plus the pgvector driver, and
+`inget migrate`. The destination schema is the design's "Destination schema (pgvector)"
+section, with the parameterised parts rendered from configuration.
+
+Files: `destination.go` (interface, `Row`, `SearchQuery`, `SearchResult`), `row.go` (`RowID`,
+vector text encoding, the shared write-path checks), `open.go` (`Options`, identifier
+whitelist, driver registry, `FromConfig`), `pgvector.go` (pool, migration rendering, extension
+version check, `AssertModel`), `pgvector_write.go` (`Upsert`, `BulkLoad`, `DeleteItem`),
+`pgvector_query.go` (`Search`), `version.go` (extension version comparison).
+`migrations/destination/pgvector/00001_init.sql`, `migrations/embed.go` extended with
+`Destination`, `cmd/inget/migrate.go`, `deploy/docker-compose.yaml`.
+
+Pinned: nothing new. pgx v5.10.0 and goose v3.27.3 came with step 4; the package uses pgx
+directly rather than through `database/sql` because `CopyFrom` is pgx's. `inget` grew from
+5.1 MB to 17 MB (the state store plus the destination); `inget-fetch` is unchanged at 5.1 MB.
+
+Verified: `make build test lint` green with golangci-lint actually installed —
+`golangci-lint run` reports 0 issues, `go mod tidy` a no-op, `gofmt` clean, and
+`CGO_ENABLED=0 GOOS=linux GOARCH=amd64` cross-compiles both binaries. The integration suite
+ran against `pgvector/pgvector:pg17` in Docker, which is how the acceptance items were
+actually exercised: migrate is idempotent; the embedding column is `halfvec(4)` as rendered;
+`AssertModel` binds, agrees on repeat, and rejects another model, another signature and
+another width with text naming `inget reindex`; a write before `AssertModel` fails; 500
+vectors plus a planted neighbour returns the planted one at score ≥ 0.99; a search restricted
+to one of four views over 200 vectors returns only that view and finds its planted row;
+re-upsert leaves the row count unchanged; `DeleteItem` removes all three views of an item and
+tolerates an absent one; `BulkLoad` writes 1000 rows, merges a second identical load, and
+leaves no staging table; a batch size that does not divide the row count writes every row.
+`./bin/inget migrate` was run against the same database with the shipped `config.yaml` and
+the resulting `inget_vectors` matches the design's DDL column for column and index for index.
+
+Deviations from the design and the plan, all deliberate:
+
+- **The destination schema is a rendered template, not static SQL.** The design pins
+  `halfvec(1024)`, but `storage`, the embedder width and the table name are all
+  configuration, and PostgreSQL cannot parameterise a type modifier. The `.sql` file is a Go
+  template; `renderMigrations` substitutes the shape and hands the result to goose as an
+  in-memory `fstest.MapFS`. The DDL therefore still lives in one readable, versioned place,
+  at the cost of the file not being runnable by `psql` as it stands.
+- **Migrations are keyed by driver, not by dialect.** `migrations/destination/pgvector/`
+  rather than `.../postgres/`, because the next destination may not be a SQL database at all
+  and would have no dialect to name.
+- **Each destination gets its own goose version table.** `<table>_goose_version`. With one
+  shared `goose_db_version`, a second destination in the same database would read version 1
+  as applied and create nothing. The extension and the model registry are `IF NOT EXISTS`
+  for the same reason, and the registry is deliberately shared — its primary key is the table
+  name, which is exactly what D7 needs. A test migrates two destinations of different widths
+  and storage types into one database and asserts both.
+- **No `pgvector-go` dependency; vectors cross the wire as text.** The binary format is
+  about four times smaller, but halfvec is IEEE 754 half precision, and hand-rolling
+  float32 → float16 (subnormals, overflow, round-to-nearest-even) produces vectors that are
+  quietly slightly wrong — a failure mode with no symptom except worse search. The server's
+  own parser is correct, so an embedding is sent as `[0.1,…]` and cast server-side.
+- **`CopyFrom` never touches a halfvec column.** The plan asked to confirm `CopyFrom` works
+  with `halfvec`; it is sidestepped instead. The staging table is `CREATE TEMP TABLE (LIKE
+  <table> INCLUDING DEFAULTS)` with `embedding` retyped to `text`, so COPY carries text and
+  the single merge statement does the cast. `INCLUDING DEFAULTS` is load-bearing: `LIKE`
+  alone copies `NOT NULL` but not `DEFAULT now()`, and `updated_at` then has no value — this
+  was found by the integration run, not by inspection.
+- **D7 is enforced on every write, not only in `AssertModel`.** `Upsert` and `BulkLoad`
+  check each row's model, signature and width against the binding, and refuse outright if
+  `AssertModel` was never called. The registry alone cannot catch a batch assembled from two
+  embedders inside one process, and nothing downstream would report it.
+- **`inget migrate` lives in `cmd/inget/`, not `internal/cli`.** `internal/cli` is shared
+  with `inget-fetch`, so a subcommand there would link the state store and both gocloud-free
+  destination drivers into a binary that needs neither. `cli.Execute` already takes
+  subcommands from the caller, which is the seam the design intended.
+- **`Migrate` refuses pgvector older than 0.8.0.** Below it an HNSW scan filters after the
+  index scan, so a search restricted to one view loses recall silently rather than failing
+  (D9). Checking at migration time is the one moment the extension is guaranteed present and
+  the operator is watching.
+
+Choices made where the plan was silent:
+
+- **Row IDs are NUL-separated before hashing.** `sha256(datatype‖item_id‖view‖frag_key)`
+  taken literally is not injective — datatype `a/b` with view `c` collides with datatype `a`
+  and view `b/c`. A test asserts both boundaries.
+- **A duplicate id inside one call is an error, not a dedupe.** An id is derived from
+  identity, not content, so two rows sharing one is a caller that computed the same view
+  twice. Both PostgreSQL upsert forms refuse to touch a row twice in one statement anyway,
+  so the alternative is a confusing error from the server.
+- **The table name is whitelisted to lowercase identifiers.** It reaches DDL and DML as text
+  because neither a table name nor a type modifier can be a bind parameter. It comes from a
+  config file rather than a request, so this is not the primary defence, but it is three
+  lines and it stops `Options` from being a hazard for a future caller.
+- **`Upsert` batches with `pgx.Batch`; a batch is not a transaction.** A failure partway
+  leaves earlier batches written, which is what the pipeline's per-item checkpointing
+  expects — an item is checkpointed after its rows land.
+- **`Search` returns cosine similarity, not distance.** `1 - (embedding <=> …)`, so larger
+  is closer and no caller has to remember which direction it is sorting.
+- **`SET LOCAL` scopes both HNSW settings to the transaction**, so a pooled connection is
+  never handed back still carrying them.
+- **`DeleteItem` on an absent item is not an error.** A tombstone for an item that never
+  reached this destination is a normal outcome of a partial run.
+- **wrapcheck now exempts this module's own internal packages** (`.golangci.yml`). They wrap
+  at their own boundaries with messages tests assert, so wrapping again in `cmd/inget`
+  repeated the same phrase — "migrating the state store: migrating postgres state store: …".
+  Errors from outside the module are still checked everywhere.
+
+Known limitations, deliberate:
+
+- No `--only` flag on `migrate`: it migrates the state store and every configured
+  destination. A configuration with one unreachable destination therefore fails the whole
+  command after the reachable ones are already correct, which is safe because every step is
+  idempotent.
+- The text wire format costs roughly four times the bytes of binary during a cold load. If a
+  real reindex shows that as the bottleneck, the answer is a narrower float format for
+  halfvec columns (it keeps ~3–4 decimal digits), not hand-rolled float16.
+- No `Search` filter beyond datatype and view. `related_keys` and `metadata` have GIN indexes
+  and no accessor; `inget query` (step 13) is the first caller that needs one.
+- No k8s CronJob examples in `deploy/` yet — step 13 owns those.
+- `internal/destination` is not linked by `inget-fetch` and never should be.

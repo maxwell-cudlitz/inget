@@ -2,8 +2,8 @@
 // invalidation cascade and enrichment pipeline over them, and upserts view vectors into
 // destinations. It holds no source credentials.
 //
-// This entrypoint only wires the shared root command; the run, plan, migrate, reindex,
-// state, query and eval subcommands arrive in later implementation steps.
+// This entrypoint wires the shared root command and the subcommands that exist; the run,
+// plan, reindex, state, query and eval subcommands arrive in later implementation steps.
 package main
 
 import "github.com/maxwellcudlitz/inget/internal/cli"
@@ -15,5 +15,7 @@ func main() {
 		Long: "inget reads committed artifact runs from the blob store, derives per-fragment\n" +
 			"and per-view enrichments through a staged invalidation cascade, embeds them, and\n" +
 			"upserts the result into a vector destination.",
-	})
+	},
+		migrateCommand(),
+	)
 }

@@ -33,7 +33,7 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 ## Layout
 
 ```
-cmd/inget/            enrichment entrypoint
+cmd/inget/            enrichment entrypoint, plus the migrate subcommand  [migrate done]
 cmd/inget-fetch/      fetch entrypoint
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
@@ -44,17 +44,23 @@ internal/delta/       reconciliation, hashing, signatures, glob scoping [impleme
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      pipeline stages, llm + passthrough enrichers, composer, refs
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
-internal/destination/ registry, pgvector
+internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   adaptive limiter, header parsers
 internal/pipeline/    orchestration, worker pool, checkpointing, signals
-migrations/           goose SQL (state/, destination/), embedded  [state implemented]
+migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
-deploy/               docker-compose, k8s CronJob examples
+deploy/               docker-compose  [implemented], k8s CronJob examples
 ```
 
 `internal/cli` is an addition to the layout in the design document: both binaries need
 identical root-command scaffolding, so it lives in one place rather than being duplicated
-across two mains.
+across two mains. A subcommand that pulls heavy dependencies belongs to the entrypoint that
+wants it instead: `migrate` lives in `cmd/inget/` because linking the state store and the
+destination drivers into the shared package would put that weight into `inget-fetch`, which
+needs neither. `inget` is 17 MB; `inget-fetch` is still 5.1 MB.
+
+Destination migrations are keyed by driver, not by SQL dialect, because a destination need
+not be a SQL database at all.
 
 ## Conventions
 
@@ -105,6 +111,18 @@ docker run -d --rm --name inget-pg -e POSTGRES_PASSWORD=inget -e POSTGRES_DB=ing
   -p 55433:5432 postgres:17-alpine
 INGET_TEST_PG='postgres://postgres:inget@127.0.0.1:55433/inget?sslmode=disable' \
   go test -race ./internal/state/...
+```
+
+The destination suite reads the same variable but needs pgvector, not plain PostgreSQL, and
+skips entirely without it. Nothing about halfvec casting, HNSW recall under a filter, or
+COPY into a staging table can be faked, so a green run with the variable unset has tested
+none of it:
+
+```bash
+docker run -d --rm --name inget-pgvector -e POSTGRES_USER=inget -e POSTGRES_PASSWORD=inget \
+  -e POSTGRES_DB=inget -p 55433:5432 pgvector/pgvector:pg17
+INGET_TEST_PG='postgres://inget:inget@127.0.0.1:55433/inget?sslmode=disable' \
+  go test -race ./internal/destination/...
 ```
 
 ## Extension points
@@ -205,5 +223,36 @@ require touching the pipeline.
 - **State conformance runs against sqlite by default.** `INGET_TEST_PG` adds the postgres
   half of the suite, and that run DROPs the `inget_state` schema of the database it names
   before every case. A behaviour asserted only on sqlite is not asserted.
+- **Vectors cross the wire as text (`internal/destination/row.go`).** An embedding is sent
+  as `[0.1,0.2,…]` and cast to the column's type server-side. The binary protocol would be
+  about four times smaller, but halfvec is IEEE 754 half precision and hand-rolling float32
+  to float16 — subnormals, overflow, round-to-nearest-even — produces vectors that are
+  quietly slightly wrong, which nothing detects because nothing fails: search answers just
+  get worse. This is also why `BulkLoad`'s staging column is `text` and the cast happens in
+  the merge, so `CopyFrom` never speaks halfvec at all.
+- **The destination schema is a rendered template (`migrations/destination/pgvector/`).**
+  A vector column's width and storage type come from config and PostgreSQL cannot
+  parameterise a type modifier, so the `.sql` file is a Go template and is not runnable by
+  `psql` as it stands. Two consequences to preserve when editing it: index names are derived
+  from the table name, and the extension and the model registry are `IF NOT EXISTS`, because
+  one database can hold several destinations. Each destination also gets its own goose
+  version table (`<table>_goose_version`) — with one shared table the second destination
+  would read version 1 as already applied and create nothing.
+- **`CREATE TEMP TABLE (LIKE …)` drops defaults.** `BulkLoad` needs `INCLUDING DEFAULTS`:
+  `LIKE` alone copies `NOT NULL` but not `DEFAULT now()`, so `updated_at` has no value and
+  the COPY fails. Indexes are deliberately not copied.
+- **D7 is enforced at the write path, not just at `AssertModel`.** `Upsert` and `BulkLoad`
+  check every row's model, signature and width against the binding, and refuse to write at
+  all if `AssertModel` was never called. Removing that check would let a batch assembled
+  from two embedders land in one table, which is the failure the registry exists to prevent
+  and which no query would report.
+- **`hnsw.iterative_scan` is what makes one index enough (D9).** `Search` sets it per
+  transaction. Below pgvector 0.8.0 the setting does not exist and a filtered search loses
+  recall silently rather than failing, so `Migrate` refuses an older extension. Do not drop
+  either the version check or the `SET LOCAL`.
+- **wrapcheck exempts this module's own internal packages (`.golangci.yml`).** They wrap at
+  their own boundaries and their messages are asserted by tests, so a second wrap in a
+  caller repeats the phrase instead of adding to it. Errors from outside the module are
+  still checked everywhere; do not widen the glob further.
 - **Cost.** `inget plan` exists so no run spends money unexpectedly. Any change that can
   increase LLM calls must be visible there first.

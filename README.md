@@ -13,12 +13,13 @@ index you can search in plain language, without re-paying for work that has not 
 Because the two are separate, a fetch failure never wastes model spend, and you can
 iterate on prompts against artifacts you already have — no re-fetching, no rate limits.
 
-> **Status: under construction.** Steps 1–4 of 14 in `docs/implementation-plan.md` are
-> complete: the binaries build, report their version, load a validated layered
-> configuration, the artifact envelope — content-addressed blob store, JSONL record
-> shards, manifests, the `_COMMIT` protocol — round-trips, and the state store persists
-> every level of the invalidation cascade on PostgreSQL or SQLite. No command writes or
-> reads a run yet; fetching and enrichment are not implemented.
+> **Status: under construction.** Steps 1–7 of 14 in `docs/implementation-plan.md` are
+> complete: the binaries build, report their version and load a validated layered
+> configuration; the artifact envelope — content-addressed blob store, JSONL record shards,
+> manifests, the `_COMMIT` protocol — round-trips; the state store persists every level of
+> the invalidation cascade on PostgreSQL or SQLite; the cascade engine and the model clients
+> are implemented; and the pgvector destination stores, filters and searches view vectors.
+> No command fetches or enriches yet — the connectors and the pipeline are steps 8–10.
 
 ## Install
 
@@ -39,7 +40,17 @@ remaining implementation steps. Today:
 ```bash
 inget version
 inget --help
-inget --config /etc/inget/config.yaml --help
+inget migrate            # create the state schema and the vector tables
+```
+
+`migrate` is idempotent and needs the DSN variables config names. A local stack, from
+nothing:
+
+```bash
+docker compose -f deploy/docker-compose.yaml up -d
+export INGET_STATE_DSN='postgres://inget:inget@localhost:5432/inget?sslmode=disable'
+export INGET_PGVECTOR_DSN="$INGET_STATE_DSN"
+inget migrate
 ```
 
 The shape it is building toward:
@@ -145,8 +156,16 @@ the blob store a replay log and an audit trail, and makes prompt iteration free.
 is one URL — `file://`, `s3://` or `gs://` — so moving from a laptop to object storage is
 a configuration change.
 
+One consequence worth knowing before you point `inget` at a real index: a destination table
+is bound to exactly one embedder, recorded in `inget_model_registry` and checked on every
+write. Vectors from two models occupy different spaces, so mixing them produces rankings
+that look ordinary and mean nothing. Changing `models.embedder` is therefore a reindex, not
+a config edit, and the error says so rather than letting the write through.
+
 Steps 1–8 of the plan need no network access and no credentials, so most development runs
-entirely offline against fakes.
+entirely offline against fakes. The destination tests are the exception: HNSW recall and
+halfvec casting are the extension's behaviour and cannot be faked, so they skip unless
+`INGET_TEST_PG` points at a scratch database with pgvector.
 
 ## Security notes
 

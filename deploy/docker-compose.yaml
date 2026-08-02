@@ -1,0 +1,71 @@
+# Local development stack: the state store, the vector destination, and the embedder.
+#
+# One PostgreSQL serves both schemas. inget_state and inget_vectors are separate namespaces
+# in the same database on purpose — they are written in the same transaction boundary often
+# enough that splitting them across servers would buy nothing and cost a distributed commit.
+#
+# Nothing here is exposed beyond localhost and nothing here is hardened. The credentials are
+# fixed and weak because this file is for a laptop; a deployed instance gets its DSN from a
+# secret named by INGET_STATE_DSN and INGET_PGVECTOR_DSN, and neither binary listens on a
+# socket, so there is no server to authenticate against.
+#
+# Bring it up, then:
+#   export INGET_STATE_DSN='postgres://inget:inget@localhost:5432/inget?sslmode=disable'
+#   export INGET_PGVECTOR_DSN="$INGET_STATE_DSN"
+#   inget migrate
+
+name: inget
+
+services:
+  # pgvector 0.8.0 or newer is required: below it an HNSW scan filters after the index scan,
+  # so a search restricted to one view silently loses recall (D9). The pinned tag ships it.
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: inget
+      POSTGRES_PASSWORD: inget
+      POSTGRES_DB: inget
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Index builds are the slow part of a cold load. These are laptop-scale values; the
+    # design's tuning note (maintenance_work_mem 8-16 GB, max_parallel_maintenance_workers
+    # = cores/2) is for the machine a real reindex runs on.
+    command:
+      - postgres
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - max_parallel_maintenance_workers=2
+      - -c
+      - shared_buffers=512MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inget -d inget"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Text Embeddings Inference serving the model config.yaml names by default. Native width
+  # is 1024, which is the pinned vector contract (D8), so no Matryoshka truncation is needed
+  # on this path.
+  embedder:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    command: ["--model-id", "Qwen/Qwen3-Embedding-0.6B", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - embedder-cache:/data
+    environment:
+      HF_HOME: /data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      # The first start downloads about 1.2 GB of weights.
+      retries: 60
+      start_period: 60s
+
+volumes:
+  postgres-data:
+  embedder-cache:
