@@ -44,36 +44,65 @@ inget migrate            # create the state schema and the vector tables
 inget plan [datatype]    # what a run would do, and what it would cost
 inget run  [datatype]    # enrich, embed, upsert
 
-# Both accept --only ID[,ID...] and --limit N; run also accepts --dry-run.
+inget-fetch              # enumerate a source and write an artifact run
 ```
 
-`plan` reads only: it opens no destination, takes no lock, calls no model, and reports the
-fragment derivations, view generations, estimated tokens and cost a run would spend, plus any
-prompt or model change that has invalidated cached work. Its estimates are upper bounds. A run
-restricted by `--only` or `--limit` is recorded as a partial run and issues no tombstones,
-because an item it never looked at is not an item that was deleted.
-
-`migrate` is idempotent and needs the DSN variables config names. A local stack, from
-nothing:
+A local stack, from nothing to a searchable index:
 
 ```bash
 docker compose -f deploy/docker-compose.yaml up -d
 export INGET_STATE_DSN='postgres://inget:inget@localhost:5432/inget?sslmode=disable'
 export INGET_PGVECTOR_DSN="$INGET_STATE_DSN"
+export INGET_GITHUB_TOKEN=ghp_...
 inget migrate
+inget-fetch --limit 20   # write a committed artifact run
+inget plan               # what would change, and what it would cost
+inget run                # enrich, embed, upsert
 ```
 
-The shape it is building toward:
+`inget plan` before `inget run` is the point of the design: you see the number of LLM calls
+and the estimated cost before spending anything. `plan` reads only — it opens no
+destination, takes no lock and calls no model — and reports the fragment derivations, view
+generations, estimated tokens and cost a run would spend, plus any prompt or model change
+that has invalidated cached work. Its estimates are upper bounds.
+
+### Fetching
+
+`inget-fetch` is one action, so it has no subcommand:
 
 ```bash
-inget-fetch --source github --limit 20   # write an artifact run
-inget plan                               # what would change, and what it would cost
-inget run                                # enrich, embed, upsert
-inget query "which repos handle terraform"
+inget-fetch                                  # every configured datatype, full scope
+inget-fetch --datatype github/repo           # one datatype
+inget-fetch --only owner/repo,owner/other    # named items only
+inget-fetch --event-file hook.json           # items named by a webhook payload
+inget-fetch --since 24h                      # or an RFC 3339 timestamp, or a date
+inget-fetch --limit 3 --dry-run              # enumerate and report; write nothing
 ```
 
-`inget plan` before `inget run` is the point of the design: you see the number of LLM
-calls and the estimated cost before spending anything.
+It writes an immutable, atomically committed run to the blob store and reports what it did
+as JSON on stdout. Three things it does that are worth knowing:
+
+- **It skips what has not changed.** A repository whose last push matches what state
+  already recorded costs one line of a listing response and no further request. The rest
+  get one tree request and one archive each, never one request per file.
+- **It uploads only new content.** Fragment content is content-addressed, so a repository
+  where one file changed writes exactly one blob. Re-fetching an unchanged repository
+  writes none.
+- **It excludes detected secrets.** File content matching the gitleaks ruleset is left out
+  of the artifact, and the exclusion is recorded in the manifest by path and rule, never by
+  value. Turn it off per source with `limits.secret_scan: false` if you have a reason.
+
+`--only`, `--event-file`, `--since` and `--limit` all mean the run did not see the whole
+domain, so it is recorded as partial and issues no tombstones: an item it never looked at
+is not an item that was deleted. Only a complete, untruncated run can conclude that
+something was removed at the source.
+
+`migrate` is idempotent and needs the DSN variables config names. What comes next:
+
+```bash
+inget query "which repos handle terraform"
+inget eval
+```
 
 ## Configuration
 
@@ -179,13 +208,18 @@ halfvec casting are the extension's behaviour and cannot be faked, so they skip 
 
 ## Security notes
 
-- Artifacts can contain secrets that were committed to fetched repositories. Keep the
-  blob store private and encrypted at rest; it is not safe to share publicly.
+- File content matching the gitleaks ruleset is excluded from artifacts, and the exclusion
+  is recorded by path and rule rather than by value. Detection is not elimination: keep the
+  blob store private and encrypted at rest, since a credential the ruleset does not
+  recognize will still land in it. Artifacts are not safe to share publicly.
 - Fetched content is untrusted input flowing into prompts. It is delimited and treated as
   data, output is validated and never interpreted as instructions, and no tool calls are
   driven by it. This is mitigation, not elimination — see the design's residual risks.
 - Credentials are read only from environment variables named by config, and log output
   redacts secret-bearing attribute keys.
+- Neither binary listens on a socket, so there is no server and no authentication surface.
+  A webhook receiver would introduce one; `--event-file` deliberately reads a payload from
+  disk instead.
 
 ## License
 

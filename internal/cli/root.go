@@ -15,6 +15,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/maxwellcudlitz/inget/internal/config"
 	"github.com/maxwellcudlitz/inget/internal/logging"
@@ -33,6 +34,15 @@ type App struct {
 	Name  string // binary name, e.g. "inget"
 	Short string // one-line description shown in help
 	Long  string // extended description shown in `<binary> --help`
+
+	// Run replaces the bare binary's default behaviour of printing help. inget-fetch has
+	// exactly one action, and the design's CLI surface spells it `inget-fetch [flags]`, so it
+	// belongs to the root command rather than to a subcommand no invocation would omit.
+	Run func(cmd *cobra.Command, args []string) error
+
+	// Flags registers the root command's own non-persistent flags. It runs after --config is
+	// attached, so a name collision surfaces at startup rather than silently shadowing.
+	Flags func(flags *pflag.FlagSet)
 }
 
 // NewRoot builds the root command for app with the version subcommand attached and
@@ -47,8 +57,12 @@ func NewRoot(app App) *cobra.Command {
 		Long:          app.Long,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		// Running the bare binary is not an error; show help and exit zero.
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		// Without an action of its own, running the bare binary is not an error: show
+		// help and exit zero.
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if app.Run != nil {
+				return app.Run(cmd, args)
+			}
 			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -66,6 +80,12 @@ func NewRoot(app App) *cobra.Command {
 		},
 	}
 	root.PersistentFlags().String(ConfigFlag, defaultConfigPath(), "path to the base configuration file")
+	if app.Run != nil {
+		root.Args = cobra.NoArgs
+	}
+	if app.Flags != nil {
+		app.Flags(root.Flags())
+	}
 	root.AddCommand(versionCommand(app))
 	return root
 }

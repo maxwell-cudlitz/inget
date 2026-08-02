@@ -25,7 +25,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 6 | Model clients | **done** |
 | 7 | pgvector destination | **done** |
 | 8 | Enrichment pipeline | **done** |
-| 9 | GitHub connector | not started |
+| 9 | GitHub connector | **done** |
 | 10 | Monday connector | not started |
 | 11 | Reference resolution | not started |
 | 12 | Quality harness | not started |
@@ -378,6 +378,13 @@ Deliberately kept in-tree:
 Caveat carried into step 9: gitleaks reaches its regex engine through a WASM runtime
 rather than CGO by default. Confirm `CGO_ENABLED=0` builds still work; if not, drop the
 dependency for an in-tree ruleset.
+
+**Resolved in step 9.** `CGO_ENABLED=0` builds fine. `zricethezav/gitleaks/v8` v8.30.1 is pure
+Go — its regex engine runs on `wasilibs/go-re2` over `tetratelabs/wazero` — and
+`detect.NewDetectorDefaultConfig()` returns the whole default ruleset in one call. It adds
+about 20 indirect modules and roughly 4 MB of stripped binary. Its `Detect` path accumulates
+no findings and is mutex-guarded, so one detector is safe to share across the worker pool, and
+it is constructed with `Redact = 100` so a finding never carries a plaintext secret.
 
 ## Step 5 record
 
@@ -878,3 +885,126 @@ change surfaced; scoped composition; `reuseVector`, `selectWork`, `annotateMetad
 Known gaps, unchanged by this pass and still owned by later steps: reference resolution (step
 11), fragment-granularity destination rows, `--force LEVEL`, and `inget state show|gc|unlock`
 (step 13).
+
+## Step 9 record
+
+Implemented: the GitHub connector and the fetch side of the system. `inget-fetch` now produces
+committed artifact runs for `github/repo`, and `inget plan` reads them.
+
+**`internal/source/` (2 files):** `source.go` — `Connector`, `EventMapper`, `Ref`, `Item`,
+`Fragment`, `ListQuery`, `Result`, the tier constants and `ErrStopList`. `registry.go` —
+`Options`, `Register`, `Open`, `Registered`, `FromConfig` (the only place a source token is
+read).
+
+**`internal/source/github/` (10 files):** `github.go` (connector, registration, webhook
+mapping), `domain.go` (typed `domain`/`limits` blocks and the enumeration filters),
+`client.go` (net/http client, `getJSON`, `paginate`, `stream`), `request.go` (retries,
+response classification, `Link` parsing), `repos.go` (enumeration and the repository
+resource), `pages.go` (the two listing shapes, `--since` as a stopping condition),
+`tree.go` (recursive tree), `tarball.go` (bounded in-memory extraction), `filter.go` (noise
+patterns, tier patterns, MIME), `split.go` (sub-file fragments), `secrets.go` (gitleaks),
+`fetch.go` (the assembly).
+
+**`internal/fetch/` (3 files):** `fetch.go` (`Deps`, `RunConfig`, `Report`), `run.go` (lock,
+enumerate, worker pool, tombstones, commit, run history), `item.go` (one item into one
+record, and the blob reuse decision).
+
+**`internal/ratelimit/` (2 files):** `ratelimit.go` (`Limiter`, `Unlimited`, `RetryAfter`,
+`UnixReset`), `github.go` (token bucket over `x/time/rate` plus a reactive pause from
+`x-ratelimit-*` and `retry-after`).
+
+**CLI:** `cmd/inget-fetch/{main,fetch,deps}.go`. Fetching is the root command's own action, so
+the invocation is `inget-fetch [flags]` as the design specifies, not `inget-fetch fetch`. That
+needed two new optional fields on `cli.App`: `Run` and `Flags`.
+
+**Also:** `config.DecodeInto` (strict decoding of the raw driver blocks, which the config
+package's own doc comment had promised since step 2 but nothing provided); `secret_scan` in
+`config.yaml`'s github limits block.
+
+Pinned: `zricethezav/gitleaks/v8` v8.30.1 (D15), `golang.org/x/time` v0.15.0 (promoted from
+indirect for `rate.Limiter`).
+
+Verified: `make build`, `gofmt -l`, `go vet`, `go test -race -count=1 ./...` and the pinned
+`golangci-lint v2.12.2` are all clean, and `go mod tidy` is a no-op. A live smoke test against
+the real API committed a run for `spf13/cobra` and `oklog/ulid` (54 fragments, 54 blobs), a
+second identical fetch wrote **0 blobs and reused 54**, and `inget plan github/repo` read the
+committed run and estimated 54 fragment derivations and 16 view generations from it.
+
+Deviations from the plan and the design:
+
+- **`Fetch` returns a `Result`, not `(Item, []Fragment, error)`.** The envelope needs per-item
+  warnings — a truncated tree, an excluded file, an archive that hit its cap — and the design's
+  signature cannot express them. Warnings from a connector reach the manifest, because a run
+  that quietly dropped half a repository and one that fetched all of it must not look the same
+  afterwards.
+- **`EventMapper` is a separate optional interface**, not a `Connector` method. A source
+  without webhooks would otherwise carry a method that always fails, and a caller could not
+  distinguish that from a payload it did not understand.
+- **ETag conditional requests are not implemented.** The plan lists them, but nothing in this
+  build has anywhere to persist an ETag across runs, and within one run no path is requested
+  twice — so the mechanism would be dead code. Making it real needs an etags table in
+  `inget_state`; it belongs with step 13's operations work. The saving it forgoes is small: one
+  conditional request per organisation listing per run.
+- **`inget-fetch` links `internal/state`.** The design's architecture diagram puts the level-0
+  skip in the fetcher, which means reading `ItemFingerprints`, so the fetch binary needs a state
+  DSN. That is also what makes tombstones computable. The cost is binary size: `inget-fetch` went
+  from 5.1 MB to 55 MB, almost all of it gocloud.dev's AWS and GCS SDKs plus pgx and sqlite. The
+  github connector including gitleaks is about 4 MB of it. AGENTS.md's "inget is 17 MB" was
+  already stale; it is 51 MB.
+- **The fetch lock key is `fetch:<datatype>`, not the datatype.** A fetch only reads guard
+  state, so blocking an enrichment run that is consuming an earlier artifact would serialize two
+  jobs that do not conflict.
+- **`--since` forces partial scope.** The design's CLI table does not say so, but the envelope
+  specification names `--since` among the things that make a run partial, and it is right: a run
+  that only looked at recently-changed items cannot conclude anything about the rest.
+
+Choices made where the plan was silent:
+
+- **`--only` bypasses the domain filters.** An operator naming a repository explicitly, or a
+  webhook naming one, should get it; dropping it because config excludes forks would leave an
+  empty run with no explanation. The empty-repository check still applies, because there is
+  nothing to fragment.
+- **Blob reuse is trusted from state, without a `HasBlob` check.** A fragment whose git blob SHA
+  matches what state recorded already has its content stored under the digest state remembers,
+  and GC never collects a blob live state references. One saved round trip per unchanged
+  fragment, which is most of them.
+- **The fragment cap is applied before any upload**, so content about to be dropped is never
+  transferred. The connector sorts fragments by tier then key, which is what makes the surviving
+  prefix the informative one rather than an alphabetical accident.
+- **A connector fetch failure is a warning; an artifact or state failure aborts the run.** The
+  first is one item's problem and the item still appears in the enumerated set, so it produces no
+  tombstone. The second would fail every remaining item the same way.
+- **Files over `blob_max_bytes × 16` are recorded without content** rather than split into
+  arbitrarily many pieces. Past that size the file is a data dump, and its pieces would crowd out
+  the rest of the repository under `max_fragments_per_item`.
+- **Secret exclusion keeps the fragment.** Content is dropped, the fingerprint is kept, and
+  `meta` records `excluded=secret` with the rule IDs. Dropping the fragment entirely would make
+  it look deleted and churn the cascade; keeping the fingerprint means its next change is still
+  detectable.
+- **`--since` accepts a duration** (`24h`) as well as an RFC 3339 timestamp and a plain date.
+  A nightly job wants the duration, and computing the timestamp in a shell wrapper is a step
+  nobody should need.
+- **`inget-fetch` reports as JSON on stdout**, one object per datatype, matching the convention
+  that stdout carries program data and stderr carries diagnostics.
+- **A datatype whose source driver is not linked is skipped with a warning**, unless it was named
+  explicitly with `--datatype`, in which case it is an error naming the registered drivers. The
+  shipped configuration declares `monday`, whose connector lands in step 10, and failing the whole
+  command over it would make the implemented half unusable.
+
+Known gaps this step leaves: `--force LEVEL` is still unimplemented (step 13 owns it). Fixed
+along the way: the `github/repo` `stack` view's `depends_on` listed `go.sum`, which the noise
+filter drops, so the glob could never match; the entry is removed and the reason recorded in
+`config.yaml`. Removing an unmatchable glob changes the datatype's `config_hash` but no view's
+scoped composition, so it regenerates nothing.
+
+Two gaps flagged during the step and closed before it ended: `request_test.go` now covers a real
+403-with-retry-after against the client (retried) versus a 403 without one (not retried, because a
+permission failure is not transient) and the attempt bound; `run_test.go` covers content over
+`blob_max_bytes`, which is recorded as truncated rather than failing the item. `backoffBase` became
+a package variable so those tests exercise the retry path without sleeping through it — the github
+package's suite runs in 0.4s rather than 7s.
+
+Sizing note carried forward: as with steps 5 and 8, this step was larger than one session should
+hold, but the test surface landed with it rather than after it. The remaining thin spot is the
+orchestrator's behaviour when the blob store itself fails mid-run, which needs a failing
+`artifact.Store` and is worth doing when one exists for another reason.

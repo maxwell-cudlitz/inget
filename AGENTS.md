@@ -34,18 +34,19 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 
 ```
 cmd/inget/            enrichment entrypoint: migrate, run, plan   [implemented]
-cmd/inget-fetch/      fetch entrypoint
+cmd/inget-fetch/      fetch entrypoint; fetching is the root command's own action [implemented]
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
 internal/config/      loading, precedence, validation, secret indirection, hashing [implemented]
 internal/artifact/    envelope schema, manifest, shards, blob store [implemented]
-internal/source/      connector registry (github/, monday/)
+internal/source/      connector interface + registry (github/ [implemented], monday/)
+internal/fetch/       fetch orchestration: level-0 skip, worker pool, tombstones, commit [implemented]
 internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      enricher interface, llm + passthrough + fragment enrichers, prompts [implemented]
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
-internal/ratelimit/   adaptive limiter, header parsers
+internal/ratelimit/   Limiter interface, header parsers, github limiter [implemented]
 internal/pipeline/    orchestration, worker pool, checkpointing, signals [implemented]
 migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
@@ -54,10 +55,15 @@ deploy/               docker-compose  [implemented], k8s CronJob examples
 
 `internal/cli` is an addition to the layout in the design document: both binaries need
 identical root-command scaffolding, so it lives in one place rather than being duplicated
-across two mains. A subcommand that pulls heavy dependencies belongs to the entrypoint that
-wants it instead: `migrate` lives in `cmd/inget/` because linking the state store and the
-destination drivers into the shared package would put that weight into `inget-fetch`, which
-needs neither. `inget` is 17 MB; `inget-fetch` is still 5.1 MB.
+across two mains. `internal/fetch` is likewise an addition, and mirrors `internal/pipeline`:
+`inget-fetch` needs orchestration that is neither the connector's business nor the
+entrypoint's. A subcommand that pulls heavy dependencies belongs to the entrypoint that
+wants it instead: `migrate` lives in `cmd/inget/` because linking the destination drivers
+into the shared package would put that weight into `inget-fetch`, which needs none of them.
+
+Stripped binary sizes, both dominated by the gocloud.dev backends rather than by anything
+either binary does: `inget` 51 MB, `inget-fetch` 55 MB. The github connector including the
+gitleaks ruleset accounts for about 4 MB of the latter.
 
 Destination migrations are keyed by driver, not by SQL dialect, because a destination need
 not be a SQL database at all.
@@ -135,8 +141,14 @@ INGET_TEST_PG='postgres://inget:inget@127.0.0.1:55433/inget?sslmode=disable' \
 Each of these is a registry plus an interface; adding an implementation should not
 require touching the pipeline.
 
-- **A source**: implement the connector interface in `internal/source/<name>/`, register
-  it, add its config block and datatype definitions.
+- **A source**: implement `source.Connector` in `internal/source/<name>/`, call
+  `source.Register` from an `init`, blank-import the package from `cmd/inget-fetch/main.go`,
+  and add its config block plus datatype definitions. Decode the driver-specific `domain` and
+  `limits` maps with `config.DecodeInto`, which is strict, so a misspelled key fails the run.
+  Implement `source.EventMapper` too if the source can deliver a webhook. Four things are
+  `internal/fetch`'s job and must not be duplicated in a connector: blob writes, the level-0
+  skip, tombstones and the fragment cap. A connector returns fragments sorted by tier then key
+  and reports its own non-fatal problems as `Result.Warnings`.
 - **A datatype**: define its fragmenter, tiers and views in config, add prompt templates
   under `prompts/<source>/<datatype>/`, then gate it with `inget eval`.
 - **An enricher**: implement the enricher interface in `internal/enrich/`; it must
@@ -150,6 +162,43 @@ require touching the pipeline.
   honest, and it only works while there is one implementation to test.
 
 ## Hazards
+
+- **Tombstones are computed from the enumerated set, never from the record set
+  (`internal/fetch/run.go`).** An item that was enumerated and then failed to fetch is in
+  `seen`, so it produces no tombstone. Deriving tombstones from what was written instead
+  would delete every item that hit a transient error. `--limit`, `--only`, `--since` and
+  `scope: partial` all suppress tombstones entirely, and every one of those cases has a
+  test, because a wrong answer here deletes a live index.
+- **The artifact writer outlives the worker pool (`internal/fetch/run.go`).**
+  `errgroup.WithContext` cancels its context when `Wait` returns, and the shard writer holds
+  the context of the first `Write` for its whole lifetime. Workers are therefore handed the
+  run's context, not the group's; passing the group's makes `Commit` fail with
+  `context canceled` on a run that otherwise succeeded. The group context governs
+  enumeration only.
+- **A git blob SHA is not a blob digest.** The tree endpoint's `sha` is SHA-1 over
+  `blob <len>\0` plus content and is the level-1 *fingerprint*; the blob store keys on
+  SHA-256 of the raw content. They are never interchangeable. Reusing a stored blob
+  reference is safe only because a fingerprint match means the content is identical and GC
+  never collects a blob live state references.
+- **Sub-file fragments cannot use the file's blob SHA (`internal/source/github/split.go`).**
+  Every piece would share it and the cascade could not tell which piece changed, so each
+  piece is fingerprinted by the SHA-256 of its own bytes. Splits must also be
+  deterministic: a cut point that moved between fetches would re-derive every piece of
+  every large file forever.
+- **A directory named `doc` is a Go or Python package as often as documentation
+  (`internal/source/github/filter.go`).** Tier patterns are matched first-wins, so a broad
+  `doc/**` in tier 0 silently reclassified `doc/*.go` as documentation and reordered
+  composition. Prefer extensions over directory names, and enumerate extensions rather than
+  globbing `main.*`, which claims `main.tf` and `main.css`.
+- **Separator-free tier and skip patterns match at any depth.** `matchPath` falls back to
+  the basename when a pattern has no `/`, so `LICENSE*` drops `docs/LICENSE.md` as well as
+  the root file. That is intended; adding a pattern without a separator is a decision about
+  every directory, not just the root.
+- **Secret findings are fully redacted (`internal/source/github/secrets.go`).** The detector
+  is built with `Redact = 100`, so a finding carries no plaintext. Lowering it would put
+  live credentials into memory that log lines and warnings could reach. Rule IDs are what
+  gets recorded; content that matched is excluded from the artifact but keeps its
+  fingerprint, so its next change is still detectable.
 
 - **Signature completeness (D2).** Any input that changes generated output must be a
   struct field feeding the signature hash. A forgotten contributor means silently stale

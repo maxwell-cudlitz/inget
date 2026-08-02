@@ -92,6 +92,7 @@ sources:
       requests_per_second: 10
       max_concurrent: 4
       tarball_max_bytes: 33554432
+      secret_scan: true                # exclude file content matching the gitleaks ruleset
 
   - name: monday
     driver: monday
@@ -136,7 +137,10 @@ datatypes:
         depends_on: ["**"]
       - name: stack
         prompt: prompts/github/repo/stack.tmpl
-        depends_on: ["go.mod", "go.sum", "package.json", "pyproject.toml",
+        # go.sum and other lockfiles are dropped by the connector's noise filter, so a glob
+        # naming one would never match. The manifest beside each lockfile is what says what
+        # the project depends on.
+        depends_on: ["go.mod", "package.json", "pyproject.toml",
                      "requirements.txt", "Cargo.toml", "pom.xml", "build.gradle*",
                      "*.tf", "Dockerfile*", "docker-compose*", "Makefile"]
       - name: integrations
