@@ -40,7 +40,7 @@ internal/logging/     slog setup, secret redaction         [implemented]
 internal/config/      loading, precedence, validation, secret indirection, hashing [implemented]
 internal/artifact/    envelope schema, manifest, shards, blob store [implemented]
 internal/source/      connector registry (github/, monday/)
-internal/delta/       reconciliation, hashing, signatures, glob scoping
+internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      pipeline stages, llm + passthrough enrichers, composer, refs
 internal/model/       generator + embedder clients (OpenAI-compatible)

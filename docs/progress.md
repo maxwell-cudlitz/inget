@@ -21,7 +21,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 2 | Configuration | **done** |
 | 3 | Artifact envelope and blob store | **done** |
 | 4 | State store | **done** |
-| 5 | Delta engine | not started |
+| 5 | Delta engine | **done** |
 | 6 | Model clients | not started |
 | 7 | pgvector destination | not started |
 | 8 | Enrichment pipeline | not started |
@@ -378,6 +378,50 @@ Deliberately kept in-tree:
 Caveat carried into step 9: gitleaks reaches its regex engine through a WASM runtime
 rather than CGO by default. Confirm `CGO_ENABLED=0` builds still work; if not, drop the
 dependency for an in-tree ruleset.
+
+## Step 5 record
+
+Implemented: `internal/delta`, the invalidation cascade engine. Six source files plus a
+package doc file, covering all the actions in the plan: fragment reconciliation, enricher
+signature building, cache key derivation for levels 1–3, glob-based view scoping,
+deterministic composition, and drift measurement.
+
+Files: `delta.go` (package doc), `reconcile.go` (set comparison producing Delta),
+`signature.go` (length-prefixed sorted SHA-256 over all enricher parameters),
+`cachekey.go` (domain-separated hashing for L1/L2/L3), `scope.go` (doublestar glob
+matching for view dependency declarations), `compose.go` (tier/path sort, separator join,
+rune-aware max_chars truncation, composed hash), `drift.go` (normalised Levenshtein via
+agnivade/levenshtein).
+
+Pinned: `github.com/agnivade/levenshtein` v1.2.1, as selected by D15. doublestar was
+already present from step 2.
+
+Verified: `make build test lint` green; `go test -race -count=1 ./internal/delta/...`
+passes (1.0s); `go vet` clean; `go mod tidy` a no-op. 30 test functions across 6 test
+files cover all acceptance items: every delta permutation; identical inputs in different
+order produce identical composed hashes; changing a prompt byte changes the signature;
+`**` and single-segment globs match as specified; drift below and above threshold behaves
+correctly; a view whose globs match nothing is skippable; cache key levels are distinct
+even with identical input strings.
+
+Deviations: none. The plan's actions mapped one-to-one onto the implementation.
+
+Choices made where the plan was silent:
+
+- **Separator between entries is `\n---\n`.** The plan says "deterministic composer" but
+  does not prescribe the separator. Markdown horizontal rules are visually scannable in
+  debug output and unlikely to appear mid-fragment since connectors strip them.
+- **Cache key domain separation uses a `Ln` prefix and NUL bytes.** This makes levels
+  unforgeable from each other even with identical string inputs, since SHA-256 of
+  "L1\x00a\x00b" ≠ "L2\x00a\x00b". Config hashing uses length-prefixed encoding for a
+  similar unambiguity guarantee; here the simpler NUL approach suffices because inputs
+  are already either hex digests or prompt text (neither contains NUL).
+- **`Reconcile` returns sorted slices.** The plan does not require ordering, but
+  deterministic output simplifies test assertions and makes log messages stable.
+- **`Compose` returns the hash alongside the text.** The plan says "compute the scoped
+  composed hash"; returning it from the same function avoids double-hashing.
+- **`DriftExceedsThreshold` uses strict `>` not `>=`.** A drift of exactly the threshold
+  does not exceed it: the operator chose that threshold as the bound of acceptable change.
 
 ## Still open
 
