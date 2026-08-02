@@ -14,10 +14,15 @@ import (
 	"math"
 )
 
+// Compile-time proof that the fakes stay substitutable for the real clients.
+var (
+	_ Generator = (*FakeGenerator)(nil)
+	_ Embedder  = (*FakeEmbedder)(nil)
+)
+
 // FakeGenerator returns deterministic text derived from the input prompt hash.
 type FakeGenerator struct {
 	model string
-	dims  int // not used, just for signature consistency
 }
 
 // NewFakeGenerator creates a FakeGenerator with the given model identifier.

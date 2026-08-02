@@ -92,6 +92,11 @@ make fmt tidy clean
 
 `make build test lint` must be green before any step is considered done.
 
+`make lint` degrades quietly: without golangci-lint on `PATH` it runs `go vet` alone and
+prints a warning to stderr. `go vet` catches none of the linters CI enforces — unchecked
+errors, unused fields, unwrapped boundary errors — so run `make lint-install` once and
+confirm the output says how many issues were found, not that it skipped.
+
 The state conformance suite runs against sqlite alone unless a scratch PostgreSQL is
 pointed at. Both drivers, from a clean container:
 
@@ -125,9 +130,37 @@ require touching the pipeline.
 
 - **Signature completeness (D2).** Any input that changes generated output must be a
   struct field feeding the signature hash. A forgotten contributor means silently stale
-  data, which no test will notice unless the field is structural.
+  data. `BuildSignature` lists its fields by hand, so
+  `TestBuildSignatureCoversEveryField` walks `SignatureInput` by reflection and fails when
+  mutating a field leaves the digest unchanged. Add a field to that struct and the test
+  tells you to encode it; extend `mutateField` if the new field has a kind it cannot
+  change.
 - **Glob scoping (D3).** View dependency globs decide what regenerates. Wrong matching
-  means wrong invalidation, both directions.
+  means wrong invalidation, both directions. `ViewSkippable` takes the *changed* set and
+  tests it directly; that set must include deleted keys. Filtering it against the current
+  fragment set instead — the obvious-looking refactor — makes a view whose only changed
+  dependency was deleted look skippable, and it then stays stale forever.
+- **Drift is normalised by runes (`internal/delta/drift.go`).**
+  `levenshtein.ComputeDistance` measures in runes, so dividing by `len()` in bytes
+  understates drift on any non-ASCII string and suppresses the re-embed that
+  `drift_threshold` exists to trigger. The tests cover accented, CJK, emoji and
+  mixed-script text for exactly this reason.
+- **The composed document format is part of the cache key
+  (`internal/delta/compose.go`).** Entries are joined `\n---\n` and headed `## <key>`.
+  Changing the separator, the header or the ordering changes every level-2 hash and
+  regenerates every view in every datatype — a full re-spend. `Compose` also reports
+  truncation; passing that up is required, not optional.
+- **Model usage details are nested (`internal/model/wire.go`).** `encoding/json` matches
+  tag names literally and has no path syntax, so `json:"prompt_tokens_details.cached_tokens"`
+  compiles, matches nothing, and reports zero cache hits forever. Nested response objects
+  need nested structs.
+- **Embeddings are placed by reported index (`internal/model/embedder.go`).** The OpenAI
+  schema does not promise ordered `data`. Mapping by arrival order stores every vector
+  against the wrong view with no error at any layer.
+- **MRL truncation is client-side (`internal/model/embedder.go`).** Do not add a
+  `dimensions` field to the embedding request: TEI and most self-hosted OpenAI-compatible
+  servers do not implement it, and truncating plus re-normalizing locally is what a server
+  that does implement it would do anyway.
 - **Secret vocabulary.** `internal/logging` deliberately does not redact `input_tokens`,
   `cache_key`, `related_keys` or `signature`. Do not widen the patterns to generic
   `token`/`key` matches; the redaction tests assert these negatives.

@@ -21,20 +21,15 @@ func MatchingFragments(fragmentKeys []string, dependsOn []string) []string {
 	return matched
 }
 
-// ViewSkippable returns true when no changed key matches any glob in dependsOn,
-// meaning the view's inputs are unchanged and it can skip reprocessing.
-func ViewSkippable(fragmentKeys []string, changedKeys []string, dependsOn []string) bool {
-	// Build a set of changed keys for fast lookup.
-	changed := make(map[string]struct{}, len(changedKeys))
-	for _, k := range changedKeys {
-		changed[k] = struct{}{}
-	}
-
-	// Check whether any fragment key that matches the dependency globs is also changed.
-	for _, key := range fragmentKeys {
-		if _, isChanged := changed[key]; !isChanged {
-			continue
-		}
+// ViewSkippable reports whether a view can skip reprocessing: true when none of the
+// changed fragment keys matches any glob in dependsOn.
+//
+// changedKeys must carry deleted keys as well as added and modified ones. The changed
+// set is tested directly rather than filtered against the current fragment set, because
+// a deleted key is by definition absent from that set: filtering would report a view
+// whose only changed dependency was deleted as skippable and leave it stale forever.
+func ViewSkippable(changedKeys []string, dependsOn []string) bool {
+	for _, key := range changedKeys {
 		if matchesAny(key, dependsOn) {
 			return false
 		}

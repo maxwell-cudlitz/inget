@@ -99,9 +99,17 @@ func TestViewSkippable(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "changed key not in fragment keys",
-			changedKeys: []string{"other/file.go"},
-			dependsOn:   []string{"other/**"},
+			// A deleted fragment is changed but no longer present in the item, so its key
+			// must still invalidate the views that depended on it.
+			name:        "deleted key absent from the current fragment set",
+			changedKeys: []string{"src/removed.go"},
+			dependsOn:   []string{"src/**"},
+			want:        false,
+		},
+		{
+			name:        "deleted key outside the globs",
+			changedKeys: []string{"vendor/removed.go"},
+			dependsOn:   []string{"src/**"},
 			want:        true,
 		},
 		{
@@ -114,7 +122,7 @@ func TestViewSkippable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ViewSkippable(allKeys, tt.changedKeys, tt.dependsOn)
+			got := ViewSkippable(tt.changedKeys, tt.dependsOn)
 			if got != tt.want {
 				t.Errorf("ViewSkippable = %v, want %v", got, tt.want)
 			}

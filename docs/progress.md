@@ -397,20 +397,32 @@ Pinned: `github.com/agnivade/levenshtein` v1.2.1, as selected by D15. doublestar
 already present from step 2.
 
 Verified: `make build test lint` green; `go test -race -count=1 ./internal/delta/...`
-passes (1.0s); `go vet` clean; `go mod tidy` a no-op. 30 test functions across 6 test
+passes (1.0s); `go vet` clean; `go mod tidy` a no-op. 24 test functions across 6 test
 files cover all acceptance items: every delta permutation; identical inputs in different
 order produce identical composed hashes; changing a prompt byte changes the signature;
 `**` and single-segment globs match as specified; drift below and above threshold behaves
 correctly; a view whose globs match nothing is skippable; cache key levels are distinct
 even with identical input strings.
 
-Deviations: none. The plan's actions mapped one-to-one onto the implementation.
+Deviations: two, both from the Go interfaces sketched in the design rather than from the
+plan's actions.
+
+- **`Delta` carries keys, not fragments.** The design declares
+  `Added, Modified, Unchanged []Fragment`; the implementation uses `[]string` for all four
+  categories. Step 8 therefore needs the incoming fragment map on hand to recover
+  fingerprints for level-1 cache keys, which it holds anyway.
+- **`Compose` takes entries and returns a `Composition`.** The design declares
+  `Compose(it Item, derived map[string]string, scope []string) (string, error)`. A map
+  cannot express tier-then-path ordering, so the composer takes `[]ComposeEntry` (key,
+  tier, content) and returns text, hash and truncation facts together.
 
 Choices made where the plan was silent:
 
-- **Separator between entries is `\n---\n`.** The plan says "deterministic composer" but
-  does not prescribe the separator. Markdown horizontal rules are visually scannable in
-  debug output and unlikely to appear mid-fragment since connectors strip them.
+- **Separator between entries is `\n---\n`, and each entry is headed `## <key>`.** The
+  plan says "deterministic composer" but does not prescribe a format. The key header gives
+  the model path attribution — `surface` and `operations` are questions about *where*
+  things live — and makes a rename change the composed hash, which is the correct
+  invalidation for content that moved.
 - **Cache key domain separation uses a `Ln` prefix and NUL bytes.** This makes levels
   unforgeable from each other even with identical string inputs, since SHA-256 of
   "L1\x00a\x00b" ≠ "L2\x00a\x00b". Config hashing uses length-prefixed encoding for a
@@ -418,8 +430,10 @@ Choices made where the plan was silent:
   are already either hex digests or prompt text (neither contains NUL).
 - **`Reconcile` returns sorted slices.** The plan does not require ordering, but
   deterministic output simplifies test assertions and makes log messages stable.
-- **`Compose` returns the hash alongside the text.** The plan says "compute the scoped
-  composed hash"; returning it from the same function avoids double-hashing.
+- **`Compose` returns the hash alongside the text**, plus whether `max_chars` clipped the
+  document and the pre-truncation rune count. The plan says "compute the scoped composed
+  hash"; returning it from the same call avoids double-hashing, and the design requires
+  truncation to be recorded and logged rather than silent.
 - **`DriftExceedsThreshold` uses strict `>` not `>=`.** A drift of exactly the threshold
   does not exceed it: the operator chose that threshold as the bound of acceptable change.
 
@@ -446,8 +460,11 @@ were needed; the plan mentioned `hashicorp/go-retryablehttp` and `cenkalti/backo
 the retry surface here is 5 attempts with jitter and Retry-After — fewer than 100 lines of
 clear code that would not benefit from two transitive dependency trees.
 
-Verified: `make build test lint` green; `go vet` clean; `gofmt` clean; `go mod tidy` a
-no-op. 19 test functions across 3 test files cover all acceptance items: happy-path
+Verified: `go build`, `go vet`, `gofmt` and `go test -race` clean; `go mod tidy` a no-op.
+**`make lint` was not actually green**: golangci-lint was not installed locally, and the
+target skips it with a warning in that case, so only `go vet` ran. The linters CI enforces
+found 12 issues in this package — see the review-fix record below. Install it with
+`make lint-install` before calling a step done. 29 test functions across 6 test files cover all acceptance items: happy-path
 generation and embedding; 429 with `Retry-After` retries and succeeds; 5xx retries then
 succeeds; malformed response fails cleanly; empty choices is an error; non-retryable 4xx
 fails immediately on first attempt; truncation plus re-normalization produces unit-length
@@ -474,9 +491,10 @@ Deviations from the plan:
 
 Choices made where the plan was silent:
 
-- **`chatUsageBlock.CacheHitTokens`** is mapped from the OpenAI extension field
-  `prompt_tokens_details.cached_tokens`. DeepSeek and Kimi both report cache hits here;
-  it feeds `inget plan` cost estimates.
+- **Cache-hit tokens** come from the OpenAI extension field
+  `prompt_tokens_details.cached_tokens`, decoded through a nested `promptTokensDetails`
+  struct. DeepSeek and Kimi both report cache hits there; it feeds `inget plan` cost
+  estimates.
 - **Re-normalization is always applied.** The spec says "truncation plus re-normalization";
   normalization is applied unconditionally since it is idempotent on already-unit vectors
   and ensures the contract even if a provider returns un-normalized embeddings.
@@ -495,3 +513,76 @@ Known limitations, deliberate:
   until profiling shows connection establishment as a bottleneck.
 - Nothing links `internal/model` yet. The first command that uses it is `inget run`
   (step 8).
+
+## Step 5–6 review fixes
+
+A review of both commits found one broken gate, three bugs and a set of gaps. All are
+fixed; `go build`, `go vet`, `gofmt`, `golangci-lint run ./...` and `go test -race ./...`
+are green, with lint reporting zero issues across the repository.
+
+Broken gate:
+
+- **12 lint findings in `internal/model`**, invisible locally because `make lint` skips
+  golangci-lint when it is not installed. Eleven were unchecked errors (`resp.Body.Close`,
+  and `Write`/`Encode`/`Decode` in tests); one was `FakeGenerator.dims`, a field nothing
+  read. Bodies now close through `defer func() { _ = c.Close() }()`, tests write through
+  `writeJSON`/`writeString` helpers that fail on a write error, and the dead field is gone.
+
+Bugs:
+
+- **Cache-hit tokens were never parsed.** `json:"prompt_tokens_details.cached_tokens"` on a
+  flat field matches a literal key of that name, which no provider sends, so
+  `Usage.CacheHitTokens` was always zero and every `inget plan` estimate would have
+  overstated cost. Now a nested `promptTokensDetails` struct, covered by a test that decodes
+  raw provider JSON.
+- **Drift mixed runes and bytes.** `levenshtein.ComputeDistance` returns a rune distance;
+  the normalizer divided by `len()` in bytes, understating drift on every non-ASCII string
+  — a one-character edit in CJK text scored a third of its true value — which silently
+  suppresses the re-embed `drift_threshold` exists to trigger. Now
+  `utf8.RuneCountInString`, with tests for accented, CJK, emoji and mixed-script text.
+- **Embedding order was assumed.** `embeddingData.Index` was decoded and ignored, so a
+  provider returning `data` out of order would store every vector against the wrong view,
+  with no error and nothing wrong-looking until search answers drifted. Vectors are now
+  placed by reported index, with out-of-range and duplicate indices rejected.
+
+Gaps closed:
+
+- **Returned vector width is validated** against `Dims()` and the error names the setting to
+  change, instead of surfacing later as a pgvector column mismatch (D8).
+- **`ViewSkippable(changedKeys, dependsOn)`** dropped its fragment-set parameter. It
+  filtered the changed set against the current fragments, so a deleted key — absent from
+  that set by definition — reported its views as skippable and left them stale forever.
+- **`Compose` reports truncation.** It returns a `Composition` (text, hash, `Truncated`,
+  `OriginalChars`); the design requires clipping to be recorded and logged, and the caller
+  previously could not tell.
+- **Composed entries carry a `## <key>` header**, giving views path attribution and making a
+  rename change the composed hash.
+- **Signature completeness is enforced structurally.** `TestBuildSignatureCoversEveryField`
+  walks `SignatureInput` by reflection and fails if mutating any field leaves the digest
+  unchanged, so a field added to the struct and forgotten in `BuildSignature` fails the
+  build rather than silently serving stale views (D2).
+- **`max_input_chars` is enforced.** It was a dead config field; an oversized prompt now
+  fails locally with the setting named, rather than costing a round trip to be rejected by
+  the provider.
+- **Seed 0 reaches the provider.** `json:"seed,omitempty"` dropped it while the signature
+  still recorded `seed=0`, quietly unpinning determinism for anyone who configured that
+  value.
+- **Retries are observable and interruptible.** Each retry logs at warn with attempt,
+  delay and cause; a cancelled context aborts the wait instead of issuing one more doomed
+  request; the last attempt no longer sleeps before giving up; and a `Retry-After` beyond
+  two minutes fails immediately rather than parking a worker on an exhausted quota.
+- **The `dimensions` request parameter is gone.** MRL truncation is client-side only, so
+  TEI — the step 7 deploy target, which does not implement the parameter — behaves like
+  providers that do.
+
+API changes later steps must account for:
+
+| Before | After |
+|---|---|
+| `Compose(...) (string, string)` | `Compose(...) Composition` |
+| `ViewSkippable(fragmentKeys, changedKeys, dependsOn)` | `ViewSkippable(changedKeys, dependsOn)` |
+| `OpenAIGeneratorConfig.Concurrency`, `OpenAIEmbedderConfig.Concurrency` | removed; the pipeline owns the worker pool and reads `models.*.concurrency` itself |
+| `internal/model/openai.go` held both roles | split into `generator.go`, `embedder.go`, with shared helpers left in `openai.go` |
+
+Backoff bounds in `retry.go` are now variables so tests can shrink the clock; the package
+suite dropped from 9.2s to 2.1s. They are written only by tests.

@@ -1,9 +1,9 @@
 // Deterministic fragment composer.
 //
-// Compose concatenates enriched fragments into a single string for view input. The order
-// is controlled by the caller ("tier" or "path"), and the result is truncated at a
-// character limit. A SHA-256 hash of the composed string is returned alongside it, used
-// as part of the Level 2 cache key derivation.
+// Compose concatenates enriched fragments into a single document for view input. The
+// order is controlled by the caller ("tier" or "path"), each entry is labelled with its
+// fragment key, and the result is truncated at a character limit. A SHA-256 hash of the
+// composed string is returned alongside it, feeding the Level 2 cache key.
 package delta
 
 import (
@@ -11,10 +11,15 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
-// separator is placed between entries in the composed output.
-const separator = "\n---\n"
+const (
+	// separator is placed between entries in the composed output.
+	separator = "\n---\n"
+	// keyPrefix labels each entry with the fragment key it came from.
+	keyPrefix = "## "
+)
 
 // ComposeEntry is one fragment ready for composition.
 type ComposeEntry struct {
@@ -23,14 +28,31 @@ type ComposeEntry struct {
 	Content string
 }
 
-// Compose concatenates entries in deterministic order and returns the composed text with
-// its SHA-256 hash. The order parameter selects the sort:
-//   - "tier": sort by Tier ascending, then Key ascending within the same tier.
-//   - "path" (or any other value): sort by Key ascending.
+// Composition is the result of composing one view's fragments.
+type Composition struct {
+	Text          string // the composed document, after any truncation
+	Hash          string // SHA-256 of Text; contributes to the level-2 input hash
+	Truncated     bool   // whether maxChars dropped content
+	OriginalChars int    // rune count before truncation
+}
+
+// Compose concatenates entries in deterministic order and returns the composed document
+// with its hash. The order parameter selects the sort:
+//   - "tier": Tier ascending, then Key ascending within a tier.
+//   - "path" (or any other value): Key ascending.
 //
-// The result is truncated at maxChars characters (rune count). If maxChars <= 0, no
-// truncation is applied.
-func Compose(entries []ComposeEntry, order string, maxChars int) (composed string, hash string) {
+// Config validation restricts compose.order to those two values, so the fallback only
+// applies to programmatic callers.
+//
+// Each entry is prefixed with "## <key>" so the model can attribute content to a path
+// and so renaming a fragment changes the composed hash — content that moved is content
+// whose views should regenerate.
+//
+// The document is truncated at maxChars runes; maxChars <= 0 disables truncation.
+// Truncation is reported rather than silent: the caller records it on the item and logs
+// it, because a view generated from a clipped document is a quality signal, not a
+// detail.
+func Compose(entries []ComposeEntry, order string, maxChars int) Composition {
 	sorted := make([]ComposeEntry, len(entries))
 	copy(sorted, entries)
 
@@ -53,19 +75,22 @@ func Compose(entries []ComposeEntry, order string, maxChars int) (composed strin
 		if i > 0 {
 			b.WriteString(separator)
 		}
+		b.WriteString(keyPrefix)
+		b.WriteString(e.Key)
+		b.WriteString("\n")
 		b.WriteString(e.Content)
 	}
 
-	composed = b.String()
+	text := b.String()
+	c := Composition{OriginalChars: utf8.RuneCountInString(text)}
 
-	if maxChars > 0 {
-		runes := []rune(composed)
-		if len(runes) > maxChars {
-			composed = string(runes[:maxChars])
-		}
+	if maxChars > 0 && c.OriginalChars > maxChars {
+		text = string([]rune(text)[:maxChars])
+		c.Truncated = true
 	}
 
-	digest := sha256.Sum256([]byte(composed))
-	hash = "sha256:" + hex.EncodeToString(digest[:])
-	return composed, hash
+	digest := sha256.Sum256([]byte(text))
+	c.Text = text
+	c.Hash = "sha256:" + hex.EncodeToString(digest[:])
+	return c
 }

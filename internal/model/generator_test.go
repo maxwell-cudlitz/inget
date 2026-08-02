@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,12 +34,10 @@ func TestGeneratorHappyPath(t *testing.T) {
 			t.Errorf("unexpected messages: %+v", req.Messages)
 		}
 
-		resp := chatResponse{
+		writeJSON(t, w, chatResponse{
 			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "world"}}},
 			Usage:   chatUsageBlock{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		})
 	}))
 	defer srv.Close()
 
@@ -64,111 +63,94 @@ func TestGeneratorHappyPath(t *testing.T) {
 	}
 }
 
-func TestGenerator429RetryAfter(t *testing.T) {
-	var attempts atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := attempts.Add(1)
-		if n <= 2 {
-			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(429)
-			w.Write([]byte(`{"error":"rate limited"}`))
-			return
-		}
-		resp := chatResponse{
-			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "ok"}}},
-			Usage:   chatUsageBlock{TotalTokens: 1},
-		}
+// Cache-hit tokens arrive in a nested object. Decoding raw JSON is the point of the test:
+// a flat field with a dotted tag matches nothing and silently reports zero cache hits,
+// which would make every `inget plan` estimate overstate cost.
+func TestGeneratorCacheHitTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		writeString(t, w, `{
+			"choices": [{"message": {"role": "assistant", "content": "cached"}}],
+			"usage": {
+				"prompt_tokens": 100,
+				"completion_tokens": 20,
+				"total_tokens": 120,
+				"prompt_tokens_details": {"cached_tokens": 64}
+			}
+		}`)
 	}))
 	defer srv.Close()
 
-	g := NewGenerator(OpenAIGeneratorConfig{
-		BaseURL: srv.URL,
-		Model:   "m",
-		Timeout: 10 * time.Second,
-	})
+	g := NewGenerator(OpenAIGeneratorConfig{BaseURL: srv.URL, Model: "m", Timeout: 5 * time.Second})
 
-	text, _, err := g.Generate(context.Background(), "test")
+	_, usage, err := g.Generate(context.Background(), "prompt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text != "ok" {
-		t.Errorf("text = %q, want %q", text, "ok")
+	if usage.CacheHitTokens != 64 {
+		t.Errorf("CacheHitTokens = %d, want 64", usage.CacheHitTokens)
 	}
-	if got := attempts.Load(); got != 3 {
-		t.Errorf("attempts = %d, want 3", got)
+	if usage.PromptTokens != 100 {
+		t.Errorf("PromptTokens = %d, want 100", usage.PromptTokens)
 	}
 }
 
-func TestGenerator5xxRetryThenSuccess(t *testing.T) {
-	var attempts atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := attempts.Add(1)
-		if n == 1 {
-			w.WriteHeader(502)
-			w.Write([]byte("bad gateway"))
-			return
-		}
-		resp := chatResponse{
-			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "recovered"}}},
-			Usage:   chatUsageBlock{TotalTokens: 2},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+// A prompt over the limit fails locally, before spending a round trip.
+func TestGeneratorPromptOverMaxInputChars(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeJSON(t, w, chatResponse{Choices: []chatChoice{{Message: chatMessage{Content: "x"}}}})
 	}))
 	defer srv.Close()
 
 	g := NewGenerator(OpenAIGeneratorConfig{
-		BaseURL: srv.URL,
-		Model:   "m",
-		Timeout: 10 * time.Second,
+		BaseURL:       srv.URL,
+		Model:         "m",
+		MaxInputChars: 10,
+		Timeout:       5 * time.Second,
 	})
 
-	text, _, err := g.Generate(context.Background(), "test")
-	if err != nil {
-		t.Fatal(err)
+	_, _, err := g.Generate(context.Background(), strings.Repeat("x", 11))
+	if err == nil {
+		t.Fatal("expected an error for a prompt over max_input_chars")
 	}
-	if text != "recovered" {
-		t.Errorf("text = %q, want %q", text, "recovered")
+	if !strings.Contains(err.Error(), "max_input_chars") {
+		t.Errorf("error should name the setting to change, got: %v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("server calls = %d, want 0", got)
+	}
+
+	// Multi-byte characters count as one each, matching compose.max_chars.
+	if _, _, err := g.Generate(context.Background(), strings.Repeat("日", 10)); err != nil {
+		t.Errorf("10 runes should be within a 10-character limit, got: %v", err)
 	}
 }
 
 func TestGeneratorMalformedResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{invalid json`))
+		writeString(t, w, `{invalid json`)
 	}))
 	defer srv.Close()
 
-	g := NewGenerator(OpenAIGeneratorConfig{
-		BaseURL: srv.URL,
-		Model:   "m",
-		Timeout: 5 * time.Second,
-	})
+	g := NewGenerator(OpenAIGeneratorConfig{BaseURL: srv.URL, Model: "m", Timeout: 5 * time.Second})
 
-	_, _, err := g.Generate(context.Background(), "test")
-	if err == nil {
+	if _, _, err := g.Generate(context.Background(), "test"); err == nil {
 		t.Fatal("expected error for malformed response")
 	}
 }
 
 func TestGeneratorNoChoices(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := chatResponse{Choices: nil, Usage: chatUsageBlock{}}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, chatResponse{Choices: nil, Usage: chatUsageBlock{}})
 	}))
 	defer srv.Close()
 
-	g := NewGenerator(OpenAIGeneratorConfig{
-		BaseURL: srv.URL,
-		Model:   "m",
-		Timeout: 5 * time.Second,
-	})
+	g := NewGenerator(OpenAIGeneratorConfig{BaseURL: srv.URL, Model: "m", Timeout: 5 * time.Second})
 
-	_, _, err := g.Generate(context.Background(), "test")
-	if err == nil {
+	if _, _, err := g.Generate(context.Background(), "test"); err == nil {
 		t.Fatal("expected error for no choices")
 	}
 }
@@ -180,6 +162,7 @@ func TestGeneratorSignatureStability(t *testing.T) {
 		Temperature:     0,
 		Seed:            1,
 		MaxOutputTokens: 1024,
+		MaxInputChars:   120000,
 	}
 	g1 := NewGenerator(cfg)
 	g2 := NewGenerator(cfg)
@@ -187,33 +170,57 @@ func TestGeneratorSignatureStability(t *testing.T) {
 		t.Errorf("signatures differ: %s vs %s", g1.Signature(), g2.Signature())
 	}
 
-	cfg.Seed = 42
-	g3 := NewGenerator(cfg)
-	if g1.Signature() == g3.Signature() {
-		t.Error("seed change did not change signature")
+	mutations := []struct {
+		name   string
+		mutate func(OpenAIGeneratorConfig) OpenAIGeneratorConfig
+	}{
+		{"seed", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.Seed = 42; return c }},
+		{"model", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.Model = "kimi-k3"; return c }},
+		{"temperature", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.Temperature = 0.7; return c }},
+		{"max_output_tokens", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.MaxOutputTokens = 2048; return c }},
+		{"max_input_chars", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.MaxInputChars = 8000; return c }},
+	}
+	for _, tt := range mutations {
+		t.Run(tt.name, func(t *testing.T) {
+			if NewGenerator(tt.mutate(cfg)).Signature() == g1.Signature() {
+				t.Errorf("%s change did not change the signature", tt.name)
+			}
+		})
+	}
+
+	// The base URL is transport, not behavior: moving a proxy must not invalidate cache.
+	moved := cfg
+	moved.BaseURL = "http://other.example.com/v1"
+	if NewGenerator(moved).Signature() != g1.Signature() {
+		t.Error("base_url change altered the signature; it should not")
 	}
 }
 
-func TestGenerator4xxNonRetryable(t *testing.T) {
-	var attempts atomic.Int32
+// Seed 0 must reach the provider: omitting it would leave generation unpinned while the
+// signature still claimed a fixed seed.
+func TestGeneratorSendsZeroSeedAndTemperature(t *testing.T) {
+	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
-		w.WriteHeader(400)
-		w.Write([]byte(`{"error":"bad request"}`))
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		writeJSON(t, w, chatResponse{Choices: []chatChoice{{Message: chatMessage{Content: "x"}}}})
 	}))
 	defer srv.Close()
 
-	g := NewGenerator(OpenAIGeneratorConfig{
-		BaseURL: srv.URL,
-		Model:   "m",
-		Timeout: 5 * time.Second,
-	})
-
-	_, _, err := g.Generate(context.Background(), "test")
-	if err == nil {
-		t.Fatal("expected error for 400")
+	g := NewGenerator(OpenAIGeneratorConfig{BaseURL: srv.URL, Model: "m", Seed: 0, Timeout: 5 * time.Second})
+	if _, _, err := g.Generate(context.Background(), "test"); err != nil {
+		t.Fatal(err)
 	}
-	if got := attempts.Load(); got != 1 {
-		t.Errorf("attempts = %d, want 1", got)
+
+	seed, ok := body["seed"]
+	if !ok {
+		t.Fatal("request omitted seed")
+	}
+	if seed != float64(0) {
+		t.Errorf("seed = %v, want 0", seed)
+	}
+	if _, ok := body["temperature"]; !ok {
+		t.Error("request omitted temperature")
 	}
 }

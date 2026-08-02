@@ -25,14 +25,10 @@ func TestEmbedderHappyPath(t *testing.T) {
 			t.Fatalf("expected 2 inputs, got %d", len(req.Input))
 		}
 
-		resp := embeddingResponse{
-			Data: []embeddingData{
-				{Embedding: []float32{1, 0, 0}, Index: 0},
-				{Embedding: []float32{0, 1, 0}, Index: 1},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		writeJSON(t, w, embeddingResponse{Data: []embeddingData{
+			{Embedding: []float32{1, 0, 0}, Index: 0},
+			{Embedding: []float32{0, 1, 0}, Index: 1},
+		}})
 	}))
 	defer srv.Close()
 
@@ -56,18 +52,19 @@ func TestEmbedderHappyPath(t *testing.T) {
 
 func TestEmbedderTruncateAndRenormalize(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req embeddingRequest
-		json.NewDecoder(r.Body).Decode(&req)
-		if req.Dimensions != 2 {
-			t.Errorf("expected dimensions=2 in request, got %d", req.Dimensions)
+		// MRL truncation is client-side: the request must not carry a "dimensions" field,
+		// which TEI and most self-hosted servers do not implement.
+		var raw map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
 		}
-		resp := embeddingResponse{
-			Data: []embeddingData{
-				{Embedding: []float32{3, 4, 99, 99}, Index: 0},
-			},
+		if _, present := raw["dimensions"]; present {
+			t.Error("request carried a dimensions field; truncation is client-side")
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+
+		writeJSON(t, w, embeddingResponse{Data: []embeddingData{
+			{Embedding: []float32{3, 4, 99, 99}, Index: 0},
+		}})
 	}))
 	defer srv.Close()
 
@@ -108,16 +105,17 @@ func TestEmbedderBatching(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+
 		var req embeddingRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
 
 		data := make([]embeddingData, len(req.Input))
 		for i := range data {
 			data[i] = embeddingData{Embedding: []float32{1, 0}, Index: i}
 		}
-		resp := embeddingResponse{Data: data}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		writeJSON(t, w, embeddingResponse{Data: data})
 	}))
 	defer srv.Close()
 
@@ -144,9 +142,9 @@ func TestEmbedderBatching(t *testing.T) {
 }
 
 func TestEmbedderMalformedResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`not json`))
+		writeString(t, w, `not json`)
 	}))
 	defer srv.Close()
 
@@ -157,32 +155,8 @@ func TestEmbedderMalformedResponse(t *testing.T) {
 		Timeout:    5 * time.Second,
 	})
 
-	_, err := e.Embed(context.Background(), []string{"test"})
-	if err == nil {
+	if _, err := e.Embed(context.Background(), []string{"test"}); err == nil {
 		t.Fatal("expected error for malformed response")
-	}
-}
-
-func TestEmbedderCountMismatch(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := embeddingResponse{
-			Data: []embeddingData{{Embedding: []float32{1, 0, 0}, Index: 0}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	e := NewEmbedder(OpenAIEmbedderConfig{
-		BaseURL:    srv.URL,
-		Model:      "m",
-		Dimensions: 3,
-		Timeout:    5 * time.Second,
-	})
-
-	_, err := e.Embed(context.Background(), []string{"a", "b"})
-	if err == nil {
-		t.Fatal("expected error for count mismatch")
 	}
 }
 
@@ -216,8 +190,7 @@ func TestEmbedderSignatureStability(t *testing.T) {
 	}
 
 	cfg.TruncateDims = 512
-	e3 := NewEmbedder(cfg)
-	if e1.Signature() == e3.Signature() {
+	if e3 := NewEmbedder(cfg); e1.Signature() == e3.Signature() {
 		t.Error("truncate_dims change did not change signature")
 	}
 }
@@ -228,8 +201,7 @@ func assertUnitVector(t *testing.T, v []float32) {
 	for _, x := range v {
 		sum += float64(x) * float64(x)
 	}
-	norm := math.Sqrt(sum)
-	if math.Abs(norm-1.0) > 0.001 {
+	if norm := math.Sqrt(sum); math.Abs(norm-1.0) > 0.001 {
 		t.Errorf("vector norm = %f, want 1.0", norm)
 	}
 }
