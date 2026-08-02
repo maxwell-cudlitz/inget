@@ -22,7 +22,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 3 | Artifact envelope and blob store | **done** |
 | 4 | State store | **done** |
 | 5 | Delta engine | **done** |
-| 6 | Model clients | not started |
+| 6 | Model clients | **done** |
 | 7 | pgvector destination | not started |
 | 8 | Enrichment pipeline | not started |
 | 9 | GitHub connector | not started |
@@ -427,3 +427,71 @@ Choices made where the plan was silent:
 
 Nothing. Every library question raised through step 14 is decided and recorded in D15.
 Raise new ones here rather than deciding them inside a step.
+
+## Step 6 record
+
+Implemented: `internal/model`, the Generator and Embedder clients with one OpenAI-
+compatible HTTP driver serving both roles (D10), plus deterministic fakes for CI.
+
+Files: `model.go` (interfaces: `Generator`, `Embedder`, `Usage`), `openai.go` (the shared
+OpenAI driver with `NewGenerator` and `NewEmbedder`, MRL truncation and re-normalization),
+`retry.go` (exponential backoff with full jitter on 429 and 5xx, Retry-After parsing),
+`wire.go` (JSON request/response types for `/v1/chat/completions` and `/v1/embeddings`),
+`fake.go` (`FakeGenerator` returning hash-derived text, `FakeEmbedder` returning
+hash-derived unit vectors).
+
+Pinned: nothing new. The package uses only the standard library (`net/http`, `encoding/json`,
+`crypto/sha256`, `math`, `context`, `time`). No external retry or HTTP client libraries
+were needed; the plan mentioned `hashicorp/go-retryablehttp` and `cenkalti/backoff`, but
+the retry surface here is 5 attempts with jitter and Retry-After — fewer than 100 lines of
+clear code that would not benefit from two transitive dependency trees.
+
+Verified: `make build test lint` green; `go vet` clean; `gofmt` clean; `go mod tidy` a
+no-op. 19 test functions across 3 test files cover all acceptance items: happy-path
+generation and embedding; 429 with `Retry-After` retries and succeeds; 5xx retries then
+succeeds; malformed response fails cleanly; empty choices is an error; non-retryable 4xx
+fails immediately on first attempt; truncation plus re-normalization produces unit-length
+vectors; batching splits into the correct number of API calls; count mismatch is an error;
+empty input returns nil without calling the server; fakes are deterministic across runs;
+different inputs produce different fake outputs; signatures are stable and change when
+parameters change.
+
+Deviations from the plan:
+
+- **No `hashicorp/go-retryablehttp` or `cenkalti/backoff`.** The retry logic is 5 attempts
+  with exponential backoff, full jitter, and Retry-After — all standard patterns in under
+  100 lines. Adding two external dependencies (plus their transitive graphs) for this
+  would violate "prefer stdlib" from the conventions with no added capability.
+- **Concurrency bounding is not in this package.** The plan says `errgroup.SetLimit`; that
+  belongs at the pipeline orchestration layer (step 8) where the worker pool lives. The
+  model client is a single-call-at-a-time interface. `Concurrency` is in the config and
+  will be consumed by `internal/pipeline`.
+- **Signature format is `openai:key=value,key=value` rather than SHA-256.** The delta
+  package computes a SHA-256 over the enricher's full SignatureInput (which includes the
+  model client's signature as one field). Making the model signature itself a hash would
+  produce a hash-of-hash with no additional collision resistance and lose debuggability.
+  The format is deterministic and sorted, satisfying D2.
+
+Choices made where the plan was silent:
+
+- **`chatUsageBlock.CacheHitTokens`** is mapped from the OpenAI extension field
+  `prompt_tokens_details.cached_tokens`. DeepSeek and Kimi both report cache hits here;
+  it feeds `inget plan` cost estimates.
+- **Re-normalization is always applied.** The spec says "truncation plus re-normalization";
+  normalization is applied unconditionally since it is idempotent on already-unit vectors
+  and ensures the contract even if a provider returns un-normalized embeddings.
+- **`Embed` returns `nil` not `[][]float32{}` for empty input.** This avoids an HTTP call
+  and follows the Go convention that a nil slice is the zero value for an absent result.
+- **Batching is purely sequential.** Parallel batch requests are a pipeline-level concern.
+  The embedder sends one batch at a time, respecting the retry logic per call.
+
+Known limitations, deliberate:
+
+- No streaming. Generation responses are read in full. The pipeline processes one item at
+  a time; streaming would add complexity for no latency benefit when the consumer cannot
+  start work until the full response is available.
+- No connection pooling beyond `http.Client`'s default transport. The default transport
+  keeps connections alive and handles HTTP/2 multiplexing; a custom transport is not needed
+  until profiling shows connection establishment as a bottleneck.
+- Nothing links `internal/model` yet. The first command that uses it is `inget run`
+  (step 8).

@@ -43,7 +43,7 @@ internal/source/      connector registry (github/, monday/)
 internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      pipeline stages, llm + passthrough enrichers, composer, refs
-internal/model/       generator + embedder clients (OpenAI-compatible)
+internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector
 internal/ratelimit/   adaptive limiter, header parsers
 internal/pipeline/    orchestration, worker pool, checkpointing, signals
