@@ -44,6 +44,7 @@ internal/fetch/       fetch orchestration: level-0 skip, worker pool, tombstones
 internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
 internal/state/       Store interface, postgres, sqlite         [implemented]
 internal/enrich/      enricher interface, llm + passthrough + fragment enrichers, prompts [implemented]
+internal/enrich/refs/ reference resolvers (inget, http), key extraction, invalidation cascade [implemented]
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   Limiter interface, header parsers, github limiter [implemented]
@@ -153,6 +154,13 @@ require touching the pipeline.
   under `prompts/<source>/<datatype>/`, then gate it with `inget eval`.
 - **An enricher**: implement the enricher interface in `internal/enrich/`; it must
   contribute every input to its signature (D2) or the cascade will serve stale output.
+- **A reference resolver**: implement `refs.Resolver` in `internal/enrich/refs/`, call
+  `refs.Register` from an `init`, and add whatever config field it needs to
+  `config.Reference` plus its validation. A resolver is read-only and idempotent, returns an
+  empty `Record` rather than an error for a missing referent, and applies the declared
+  `fields` as an allowlist — a resolver that returns more than config asked for is a resolver
+  that feeds a model something nobody reviewed. It needs no signature: the payload digest in
+  `internal/enrich/refs/digest.go` already covers what it returned.
 - **A destination**: implement the destination interface in `internal/destination/`,
   including `AssertModel` so an embedder change cannot silently corrupt an index (D7).
 - **A state driver**: add a `dialect` entry in `internal/state/dialect.go` and a migration
@@ -163,6 +171,22 @@ require touching the pipeline.
 
 ## Hazards
 
+- **Reference staleness lives on the edge, not in a queue (`internal/state/refs.go`).** A
+  changed record sets `refs.stale_depth` on every edge pointing at it — one indexed UPDATE
+  regardless of fan-out — and the mark is cleared only by the referring item's own
+  re-resolution, inside that item's checkpoint transaction. Two consequences are load-bearing.
+  Deferral is free: an item the per-run cap left out keeps its mark and the next run's identical
+  query finds it, so nothing needs to remember what was skipped. And the cascade cannot be made
+  to loop, because the mark carries the depth it was made at and a record at
+  `enrich.max_reference_depth` marks nothing. Do not "optimise" this into an unconditional
+  cascade: `processItem` only cascades for an item that republished something, which is what
+  stops a cycle from costing a reprocess on every future run.
+- **A reference payload is an input, so it is in a cache key or the cascade is broken
+  (`internal/enrich/refs/resolve.go`).** Fragment-injected payloads become compose entries
+  keyed `ref:<name>`, so the existing `depends_on` globs and the composed hash cover them.
+  Metadata-injected payloads reach every prompt and no glob can scope them, so they contribute
+  `Resolution.Digest` to every view's level-2 input hash instead. A third injection path would
+  need a third answer to "which key moves when this changes" before it is added.
 - **Tombstones are computed from the enumerated set, never from the record set
   (`internal/fetch/run.go`).** An item that was enumerated and then failed to fetch is in
   `seen`, so it produces no tombstone. Deriving tombstones from what was written instead

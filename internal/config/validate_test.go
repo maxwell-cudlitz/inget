@@ -111,6 +111,18 @@ func TestValidate(t *testing.T) {
 		{"http reference endpoint", func(c *Config) {
 			c.Datatypes[0].References = []Reference{ref(func(r *Reference) { r.Resolver, r.Datatype = "http", "" })}
 		}, "endpoint is required"},
+		{"reference key_from glob syntax", func(c *Config) {
+			c.Datatypes[0].References = []Reference{ref(func(r *Reference) { r.KeyFrom = "column:[a-" })}
+		}, "not a valid glob pattern"},
+		{"reference key_regex syntax", func(c *Config) {
+			c.Datatypes[0].References = []Reference{ref(func(r *Reference) { r.KeyRegex = "([a-" })}
+		}, "key_regex"},
+		{"reference key_regex without a capture group", func(c *Config) {
+			c.Datatypes[0].References = []Reference{ref(func(r *Reference) { r.KeyRegex = `github\.com` })}
+		}, "want exactly 1"},
+		{"reference key_regex with two capture groups", func(c *Config) {
+			c.Datatypes[0].References = []Reference{ref(func(r *Reference) { r.KeyRegex = `(a)/(b)` })}
+		}, "want exactly 1"},
 		{"duplicate references", func(c *Config) {
 			c.Datatypes[0].References = []Reference{ref(nil), ref(nil)}
 		}, "more than one entry named"},

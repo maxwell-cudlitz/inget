@@ -29,19 +29,24 @@ func TestFragmentCacheKey(t *testing.T) {
 }
 
 func TestViewInputHash(t *testing.T) {
-	key := ViewInputHash("sha256:composed-hash", "sha256:prompt-sig")
+	key := ViewInputHash("sha256:composed-hash", "sha256:prompt-sig", "")
 
 	if !strings.HasPrefix(key, "sha256:") {
 		t.Errorf("ViewInputHash = %q, want sha256: prefix", key)
 	}
-	if key2 := ViewInputHash("sha256:composed-hash", "sha256:prompt-sig"); key != key2 {
+	if key2 := ViewInputHash("sha256:composed-hash", "sha256:prompt-sig", ""); key != key2 {
 		t.Errorf("same inputs produced different keys")
 	}
-	if diff := ViewInputHash("sha256:other", "sha256:prompt-sig"); diff == key {
+	if diff := ViewInputHash("sha256:other", "sha256:prompt-sig", ""); diff == key {
 		t.Error("different composed hash produced the same view input hash")
 	}
-	if diff := ViewInputHash("sha256:composed-hash", "sha256:other"); diff == key {
+	if diff := ViewInputHash("sha256:composed-hash", "sha256:other", ""); diff == key {
 		t.Error("different prompt signature produced the same view input hash")
+	}
+	// A metadata-injected reference is not in the composed document, so its digest is the
+	// only thing that can tell the guard the view's input moved (D12).
+	if diff := ViewInputHash("sha256:composed-hash", "sha256:prompt-sig", "sha256:refs"); diff == key {
+		t.Error("different reference digest produced the same view input hash")
 	}
 }
 
@@ -63,7 +68,7 @@ func TestCacheKeyLevelsDistinct(t *testing.T) {
 	// Even with the same string inputs, different level functions should produce
 	// different keys because they hash different structures.
 	l1 := FragmentCacheKey("a", "b", "c")
-	l2 := ViewInputHash("a", "b")
+	l2 := ViewInputHash("a", "b", "")
 	l3 := EmbeddingHash("a")
 
 	if l1 == l2 {

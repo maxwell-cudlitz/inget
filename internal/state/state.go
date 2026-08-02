@@ -79,12 +79,28 @@ type Store interface {
 	PutViewState(ctx context.Context, datatype, itemID string, v ViewState) error
 
 	// PutRefs replaces the complete reference edge set of one item. Edges omitted from
-	// the call are removed, so a reference deleted from config stops invalidating.
+	// the call are removed, so a reference deleted from config stops invalidating. It also
+	// clears the item's staleness marks: a rewritten edge set is a re-resolved one.
 	PutRefs(ctx context.Context, from ItemKey, edges []RefEdge) error
+
+	// Refs returns one item's outgoing reference edges, carrying the digest each was last
+	// resolved to and any staleness mark on it.
+	Refs(ctx context.Context, from ItemKey) ([]RefEdge, error)
 
 	// ReferencedBy returns the items whose references point at a key: the reverse edges
 	// the invalidation cascade walks when a referent changes (D12).
 	ReferencedBy(ctx context.Context, kind, key string) ([]ItemKey, error)
+
+	// MarkRefsStale marks every edge pointing at a key as needing re-resolution at the
+	// given cascade depth, and reports how many it marked. A mark already shallower than
+	// depth is left alone, so the bound a cycle terminates on cannot be reset by a longer
+	// path reaching the same record.
+	MarkRefsStale(ctx context.Context, kind, key string, depth int) (int, error)
+
+	// StaleReferrers returns the items of a datatype carrying a staleness mark, with the
+	// shallowest depth marked on each, sorted by item ID. Marks survive until the item
+	// re-resolves, which is what lets a capped run defer the remainder to the next one.
+	StaleReferrers(ctx context.Context, datatype string) ([]StaleReferrer, error)
 
 	// Signature returns the last recorded signature for a scope, or "" when the scope has
 	// never been recorded. Absence is not an error: every scope is new once.

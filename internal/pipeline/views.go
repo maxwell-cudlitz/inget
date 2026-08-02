@@ -22,9 +22,16 @@ import (
 // viewRequest is one item's input to view processing.
 type viewRequest struct {
 	itemID      string
-	entries     []delta.ComposeEntry // every fragment's contribution, unscoped
-	changedKeys []string             // added, modified and deleted fragment keys
-	metadata    map[string]string    // annotated item metadata
+	entries     []delta.ComposeEntry // every fragment and reference contribution, unscoped
+	changedKeys []string             // added, modified and deleted fragment keys, plus changed reference keys
+	// anyChanged forces every view past the level-1 scope check. A metadata-injected
+	// reference reaches every prompt, so no dependency glob can express which views it
+	// affects; the level-2 input hash, which carries refDigest, then decides which of them
+	// actually regenerate.
+	anyChanged  bool
+	refDigest   string            // metadata-injected reference payload, part of the level-2 key
+	metadata    map[string]string // annotated item metadata
+	relatedKeys []string          // resolved reference keys, for the vector row
 	existing    map[string]state.ViewState
 }
 
@@ -87,7 +94,7 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 	}
 
 	// Level-1 scope: nothing this view depends on changed.
-	if len(view.DependsOn) > 0 && delta.ViewSkippable(req.changedKeys, view.DependsOn) {
+	if !req.anyChanged && len(view.DependsOn) > 0 && delta.ViewSkippable(req.changedKeys, view.DependsOn) {
 		ex.stats.addViewsSkipped(1)
 		return pendingView{}, false, nil
 	}
@@ -102,8 +109,9 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 		return pendingView{}, false, nil
 	}
 
-	// Level-2 guard: same scoped input, same prompt, and a vector already exists.
-	inputHash := delta.ViewInputHash(scoped.Hash, enricher.Signature())
+	// Level-2 guard: same scoped input, same references, same prompt, and a vector already
+	// exists.
+	inputHash := delta.ViewInputHash(scoped.Hash, enricher.Signature(), req.refDigest)
 	existing := req.existing[view.Name]
 	if existing.InputHash == inputHash && existing.EmbeddedHash != "" {
 		ex.stats.addViewsSkipped(1)

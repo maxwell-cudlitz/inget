@@ -62,8 +62,9 @@ func (c *Config) validateRetention(v *validator) {
 	v.positive("retention.missing_runs", int64(c.Retention.MissingRuns))
 }
 
-// validateEnrich checks the cascade bounds. A reference depth of 0 is legal and disables
-// reference resolution; a cascade cap of 0 would disable invalidation, which is not.
+// validateEnrich checks the cascade bounds. A reference depth of 0 is legal and disables the
+// invalidation cascade — references still resolve and still guard their views, but a changed
+// referent stops propagating. A cascade cap of 0 would mean an unbounded work set, which is not.
 func (c *Config) validateEnrich(v *validator) {
 	if c.Enrich.MaxReferenceDepth < 0 {
 		v.failf("enrich.max_reference_depth = %d, want 0 or more", c.Enrich.MaxReferenceDepth)

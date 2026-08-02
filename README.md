@@ -146,6 +146,43 @@ anywhere:
 Logs are JSON on stderr; stdout carries program data only, so piping `--json` output
 stays safe. Nothing is written to log files.
 
+### References
+
+A datatype can pull context out of another record, or out of a system inget does not
+ingest, so that a work item is searchable by what the repository it links to actually
+does:
+
+```yaml
+references:
+  - name: linked_repo
+    resolver: inget                # cross-record: read another datatype from state
+    datatype: github/repo
+    key_from: "column:repo_url"    # a fragment glob; "metadata:<field>" reads metadata
+    key_regex: 'github\.com/([^/"?#]+/[^/"?#.]+)'   # narrow a URL to "owner/name"
+    fields: [description, "view:role"]              # metadata field, or a generated view
+    inject_as: fragment            # fragment | metadata
+```
+
+The `http` resolver is the same shape with `endpoint: "${TICKETS_BASE_URL}/api/{key}"` and
+an optional `token_env`. `fields` is an allowlist in both cases: nothing else from the
+response reaches a prompt.
+
+What this costs is the part worth understanding. Changing a referenced record does not
+re-fetch anything and does not re-embed the items that reference it — it marks them, and
+the next run of *their* datatype re-resolves the reference. If the payload came back
+identical, every view is skipped by the same guard that skips an unchanged item, so the
+run spends no tokens. If it moved, only the views whose `depends_on` matches
+`ref:<name>` regenerate. Two settings bound the blast radius:
+
+```yaml
+enrich:
+  max_reference_depth: 2      # how far an invalidation travels; also what ends a cycle
+  max_cascade_per_run: 5000   # invalidations one run will take; the rest wait for the next
+```
+
+Resolved keys land in the vector row's `related_keys` column, which is GIN-indexed, so
+"what else points at this repository" is a query rather than a scan.
+
 ## State
 
 Nothing durable is kept on local disk. The `state` block chooses where the cascade's

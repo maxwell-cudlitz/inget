@@ -15,6 +15,7 @@ type statsCollector struct {
 	viewsSkip  atomic.Int64
 	embeddings atomic.Int64
 	tombstones atomic.Int64
+	references atomic.Int64
 }
 
 func (s *statsCollector) addProcessed(n int)         { s.processed.Add(int64(n)) }
@@ -24,16 +25,18 @@ func (s *statsCollector) addViewsGenerated(n int)    { s.viewsGen.Add(int64(n)) 
 func (s *statsCollector) addViewsSkipped(n int)      { s.viewsSkip.Add(int64(n)) }
 func (s *statsCollector) addEmbeddings(n int)        { s.embeddings.Add(int64(n)) }
 func (s *statsCollector) addTombstones(n int)        { s.tombstones.Add(int64(n)) }
+func (s *statsCollector) addReferences(n int)        { s.references.Add(int64(n)) }
 
 // snapshot returns the current stats as a value type.
 func (s *statsCollector) snapshot() Stats {
 	return Stats{
-		ItemsProcessed:    int(s.processed.Load()),
-		ItemsFailed:       int(s.failed.Load()),
-		FragmentsEnrich:   int(s.fragEnrich.Load()),
-		ViewsGenerated:    int(s.viewsGen.Load()),
-		ViewsSkipped:      int(s.viewsSkip.Load()),
-		EmbeddingsStored:  int(s.embeddings.Load()),
-		TombstonesApplied: int(s.tombstones.Load()),
+		ItemsProcessed:     int(s.processed.Load()),
+		ItemsFailed:        int(s.failed.Load()),
+		FragmentsEnrich:    int(s.fragEnrich.Load()),
+		ViewsGenerated:     int(s.viewsGen.Load()),
+		ViewsSkipped:       int(s.viewsSkip.Load()),
+		EmbeddingsStored:   int(s.embeddings.Load()),
+		TombstonesApplied:  int(s.tombstones.Load()),
+		ReferencesResolved: int(s.references.Load()),
 	}
 }

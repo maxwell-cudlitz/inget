@@ -170,6 +170,9 @@ datatypes:
         resolver: inget
         datatype: github/repo
         key_from: "column:repo_url"
+        # The column holds a URL; a github/repo item is keyed "owner/name". The capture group
+        # is what bridges the two, so no resolver has to know what a GitHub URL looks like.
+        key_regex: 'github\.com/([^/"?#]+/[^/"?#.]+)'
         fields: [description, "view:role"]
         inject_as: fragment
     metadata_fields:

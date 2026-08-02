@@ -191,14 +191,21 @@ type Compose struct {
 
 // Reference pulls data from another datatype or an external system into enrichment
 // input. Every reference is a signature input; see D2 and D12.
+//
+// KeyFrom locates the key in the referring item: "metadata:<field>" reads item metadata,
+// and anything else is a glob matched against fragment keys, whose content becomes the
+// key. KeyRegex then narrows that raw value to its capture group, which is how a column
+// holding "https://github.com/acme/thing" resolves against a github/repo item ID.
 type Reference struct {
-	Name     string   `mapstructure:"name"`
-	Resolver string   `mapstructure:"resolver"`
-	Datatype string   `mapstructure:"datatype"` // inget resolver only
-	Endpoint string   `mapstructure:"endpoint"` // http resolver only
-	KeyFrom  string   `mapstructure:"key_from"`
-	Fields   []string `mapstructure:"fields"`
-	InjectAs string   `mapstructure:"inject_as"` // fragment | metadata
+	Name     string    `mapstructure:"name"`
+	Resolver string    `mapstructure:"resolver"`
+	Datatype string    `mapstructure:"datatype"`  // inget resolver only
+	Endpoint string    `mapstructure:"endpoint"`  // http resolver only
+	TokenEnv SecretRef `mapstructure:"token_env"` // http resolver only
+	KeyFrom  string    `mapstructure:"key_from"`
+	KeyRegex string    `mapstructure:"key_regex"` // optional; one capture group
+	Fields   []string  `mapstructure:"fields"`
+	InjectAs string    `mapstructure:"inject_as"` // fragment | metadata
 }
 
 // View is one generated, embedded document per item. DependsOn globs decide what

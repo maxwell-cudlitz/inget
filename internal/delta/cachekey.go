@@ -30,9 +30,16 @@ func FragmentCacheKey(fragmentKey, fragmentFingerprint, enricherSignature string
 }
 
 // ViewInputHash derives the Level 2 cache key from the scoped composed hash (the hash
-// of the concatenated enriched fragments in scope) and the view prompt signature.
-func ViewInputHash(scopedComposedHash, viewPromptSignature string) string {
-	return hashWithDomain("L2", scopedComposedHash, viewPromptSignature)
+// of the concatenated enriched fragments in scope), the view prompt signature, and the
+// digest of any reference payload injected as metadata.
+//
+// The reference digest is a third input rather than part of the composed hash because a
+// metadata-injected reference is not in the document: every prompt receives the whole
+// metadata map, so no dependency glob can scope it and the only honest place for it is every
+// view's key. It is "" for a datatype with no such reference, which is what keeps those
+// datatypes' hashes independent of this parameter existing.
+func ViewInputHash(scopedComposedHash, viewPromptSignature, referenceDigest string) string {
+	return hashWithDomain("L2", scopedComposedHash, viewPromptSignature, referenceDigest)
 }
 
 // EmbeddingHash derives the Level 3 cache key from the actual view text that would be

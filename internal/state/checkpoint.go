@@ -34,6 +34,11 @@ func (s *store) CheckpointItem(ctx context.Context, datatype string, cp Checkpoi
 		}
 		views = append(views, args)
 	}
+	from := ItemKey{Datatype: datatype, ItemID: cp.Item.ID}
+	refs, err := refRows(from, cp.Refs)
+	if err != nil {
+		return err
+	}
 
 	err = s.inTx(ctx, func(t tx) error {
 		if err := t.exec(ctx, itemUpsertSQL, item...); err != nil {
@@ -43,6 +48,9 @@ func (s *store) CheckpointItem(ctx context.Context, datatype string, cp Checkpoi
 			return err
 		}
 		if err := t.execMany(ctx, viewUpsertSQL, views); err != nil {
+			return err
+		}
+		if err := putRefs(ctx, t, from, refs); err != nil {
 			return err
 		}
 		affected, err := t.execAffected(ctx, workCompleteSQL,

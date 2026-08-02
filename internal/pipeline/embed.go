@@ -49,15 +49,16 @@ func embedViews(ctx context.Context, ex *execution, req viewRequest, pending []p
 		// Row.ID is left for the destination to derive from the row's identity, so the two
 		// packages cannot disagree about what a row's primary key is.
 		rows = append(rows, destination.Row{
-			Datatype:  cfg.Name,
-			ItemID:    req.itemID,
-			ViewName:  p.name,
-			Text:      p.text,
-			Embedding: vectors[i],
-			Model:     emb.Model(),
-			Dims:      emb.Dims(),
-			Signature: emb.Signature(),
-			Metadata:  req.metadata,
+			Datatype:    cfg.Name,
+			ItemID:      req.itemID,
+			ViewName:    p.name,
+			Text:        p.text,
+			Embedding:   vectors[i],
+			Model:       emb.Model(),
+			Dims:        emb.Dims(),
+			Signature:   emb.Signature(),
+			Metadata:    req.metadata,
+			RelatedKeys: req.relatedKeys,
 		})
 	}
 	ex.stats.addEmbeddings(len(pending))

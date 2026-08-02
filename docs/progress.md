@@ -26,8 +26,8 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 7 | pgvector destination | **done** |
 | 8 | Enrichment pipeline | **done** |
 | 9 | GitHub connector | **done** |
-| 10 | Monday connector | not started |
-| 11 | Reference resolution | not started |
+| 10 | Monday connector | not started (skipped ahead of 11) |
+| 11 | Reference resolution | **done** |
 | 12 | Quality harness | not started |
 | 13 | Reindex and operations | not started |
 | 14 | Release and documentation | not started |
@@ -776,7 +776,8 @@ Deviations from the plan:
 - **Reference resolution is a no-op.** Step 11 implements D12; the pipeline does not call
   PutRefs or ReferencedBy. The stage 3 position is established in processItem's comment
   structure and in the TemplateData type (which has no References field yet — step 11 adds
-  it).
+  it). *Superseded by the step 11 record: references are implemented, and TemplateData
+  deliberately gained no References field.*
 - **The pipeline claims one item at a time from the work queue**, not a batch. The plan's
   errgroup pattern spawns one goroutine per claimed item; claiming batches larger than 1
   would require a separate claim loop, adding complexity without benefit since the
@@ -1008,3 +1009,120 @@ Sizing note carried forward: as with steps 5 and 8, this step was larger than on
 hold, but the test surface landed with it rather than after it. The remaining thin spot is the
 orchestrator's behaviour when the blob store itself fails mid-run, which needs a failing
 `artifact.Store` and is worth doing when one exists for another reason.
+
+## Step 11 record
+
+Step 10 was skipped by instruction, so `monday/item` — the one datatype in the shipped config
+that declares a reference — has no connector yet. Everything below is therefore exercised
+against `github/repo` in tests rather than against the shipped Monday configuration.
+
+Implemented: `internal/enrich/refs` (resolver interface plus registry, the `inget` and `http`
+resolvers, `key_from`/`key_regex` extraction, payload rendering, per-reference digests, the
+invalidation cascade); `refs.stale_depth` on the state schema with `Refs`, `MarkRefsStale` and
+`StaleReferrers` on the Store, and reference edges written inside `CheckpointItem`'s
+transaction; stage 4 and the cascade in `internal/pipeline/process.go`; the pull half in
+`reconcile`; `related_keys` on destination rows; `key_regex` and `token_env` on
+`config.Reference` with validation; the `key_regex` the shipped Monday reference needs to turn
+a repo URL into a `github/repo` item ID.
+
+Verified: `gofmt -l .` clean, `go vet ./...` clean, `golangci-lint run` (v2.12.2) reports 0
+issues, `go test -race -count=1 ./...` passes, `make build` produces both binaries, `go mod
+tidy` is a no-op. The gate test is
+`TestChangedReferentInvalidatesOnlyTheDependentViews`: the referring item resolves its
+reference, a second identical run does nothing, the referent's view text then changes and the
+item regenerates 3 of its 8 views — the three whose globs match `ref:linked_repo` — embedding
+and upserting only those, with zero fragment derivations; a fourth run is again silent.
+The pgvector `related_keys` overlap query and its GIN index are covered by a case gated on
+`INGET_TEST_PG`, which has not been observed running here.
+
+### How invalidation works, and what it costs
+
+The mechanism is the part to understand before changing any of it. A record that changed sets
+`refs.stale_depth` on every edge pointing at it: one indexed UPDATE, so a widely-referenced
+record costs the same as an unreferenced one. The mark is cleared only by the referring item's
+own re-resolution, which happens inside that item's checkpoint transaction.
+
+That single choice answers three requirements at once:
+
+- **Cross-datatype.** A run is per datatype, so the referent and its referrer are processed by
+  different runs. The mark is durable, so the referrer's next run finds it.
+- **Deferral.** `max_cascade_per_run` is applied where the expense is — the pull side, in
+  `reconcile` — and an item left out keeps its mark, so the next run's identical query finds it.
+  Nothing has to remember what was skipped.
+- **Termination.** The mark carries the depth it was made at, and a record already at
+  `max_reference_depth` marks nothing. `X → Y → X` stops after the bound.
+
+Cost, since it was asked directly: nothing re-ingests. `inget-fetch` is untouched by a cascade;
+an invalidated item is read from the artifact run already on disk. No generator call happens
+unless the payload actually moved: fragment fingerprints are unchanged so derivations hit the
+level-1 cache, and the level-2 input hash is unchanged so every view is skipped. The floor is a
+few state reads plus one blob read per `key_from` glob match. `processItem` also only cascades
+for an item that republished something, so a no-op re-resolution ends the chain rather than
+passing it along.
+
+### Deviations from the plan and the design
+
+- **No BFS walk and no visited set.** The design's edge-case table pairs
+  `max_reference_depth` with "visited-set cycle detection". The depth carried on each mark
+  makes a visited set redundant — depth increases monotonically and stops at the bound — and it
+  also removes the need to enumerate referrers at all, since one UPDATE marks them.
+  `ReferencedBy` is still on the Store, still tested, and is what `inget state show` will read.
+- **`stale_depth` is a new column, in migration `00002_ref_staleness.sql` for both dialects.**
+  Editing `00001_init.sql` would have diverged from any already-migrated database.
+- **The `inget` resolver reads state only, not destinations.** The plan says "state and
+  destinations". `state.views.text` is by definition the text the stored vector was produced
+  from, so a destination round trip would return the same string while requiring a new
+  `Destination` method and a reachable vector database during enrichment — which `inget plan`,
+  which opens no destination, does not have.
+- **`TemplateData` gained no `References` field**, contrary to the step 8 note. Payloads reach
+  prompts through the two paths config already declares: `inject_as: fragment` becomes a compose
+  entry, so it lands inside the untrusted-data envelope the view prompts already fence, and
+  `inject_as: metadata` lands in `.Metadata`. A third path would be a third place for injected
+  instructions to look plausible, and a third answer needed for "which cache key moves when this
+  changes".
+- **`ViewInputHash` takes a third argument, the metadata-reference digest.** A
+  metadata-injected payload is not in the composed document and no glob can scope it, so the
+  only honest place for it is every view's level-2 key. It is `""` for a datatype with no such
+  reference.
+- **Two config fields were added beyond the design's example**: `key_regex` (one capture group,
+  validated) and `token_env`. Without the first, the design's own `key_from: "column:repo_url"`
+  cannot resolve against a `github/repo` item ID, and the alternative is a resolver that knows
+  what a GitHub URL looks like. `token_env` follows the repo's secrets-by-indirection rule; the
+  header sent is `Authorization: Bearer <token>`.
+- **Reference configuration contributes no signature of its own.** Adding a field changes the
+  payload, so the digest moves; removing a reference removes its edge and its compose entry, so
+  the composed hash moves. Both are already covered by D2's existing keys.
+- **A reference resolves to a key namespace, not a bare ID.** `refs.IngetKey` renders
+  `<datatype>|<itemID>` and an http key is `<reference name>|<raw>`, so the reverse index cannot
+  collide two unrelated referents. Those strings are also what `related_keys` carries.
+
+### Choices made where the plan was silent
+
+- **`inject_as: metadata` writes `<name>.<field>`**, keeping two references that pull the same
+  field name apart.
+- **Reference payloads compose at tier 0**, ahead of source files, so a deliberately declared
+  reference survives `compose.max_chars` truncation rather than being clipped by whatever else
+  was in scope.
+- **An unresolved referent records an edge with an empty digest.** That edge is what lets the
+  referent's first run invalidate this item once it exists; the case is tested both ways. A
+  `key_from` that extracts no key records nothing, so an item with no linked record does not
+  re-enqueue itself every run.
+- **A metadata-injected change bypasses the level-1 scope check for every view**
+  (`viewRequest.anyChanged`), leaving level 2 to decide which actually regenerate.
+- **An invalidated item absent from the artifact run is skipped with a debug log**, not
+  enqueued: the claim loop cannot process what it cannot read, and it would fail every run
+  forever. Its mark is collected with the rest of its state by `inget state gc` (step 13).
+- **A cascade failure is logged, not returned.** The item's own work is committed and correct,
+  and the next change to it marks again.
+
+### Known gaps
+
+- **An `http` referent changes invisibly.** Nothing tells inget that an external ticket moved,
+  so the payload refreshes only when the referring item is processed for another reason. A TTL or
+  a `--force` scope would fix it; step 13 owns `--force`.
+- **`enrich.max_reference_depth: 0` disables the cascade but not resolution.** References still
+  resolve and still guard their views; only the cross-record invalidation stops. That is the
+  reading validation already allows ("0 disables reference resolution" in `validate.go` is now
+  imprecise wording, left alone rather than changed mid-step).
+- **Tombstoning an item leaves its outgoing edges.** They are filtered out of the work set by
+  the artifact-run check above; `state gc` should delete them.

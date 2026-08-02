@@ -13,6 +13,7 @@ import (
 
 	"github.com/maxwellcudlitz/inget/internal/artifact"
 	"github.com/maxwellcudlitz/inget/internal/delta"
+	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
 )
 
 // reconcileResult holds the computed delta from artifact scanning.
@@ -21,6 +22,9 @@ type reconcileResult struct {
 	tombstones []string
 	partial    bool                        // the run saw a subset of items, so absence proves nothing
 	records    map[string]*artifact.Record // itemID → record for processing
+	// changed is the items whose own content moved, as opposed to the ones a reference
+	// invalidated. Only the former cascade unconditionally; see processItem.
+	changed map[string]bool
 }
 
 // reconcile opens the latest artifact run and computes what changed against state.
@@ -66,6 +70,16 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 	candidates := make([]string, 0, len(d.Added)+len(d.Modified))
 	candidates = append(candidates, d.Added...)
 	candidates = append(candidates, d.Modified...)
+	changed := make(map[string]bool, len(candidates))
+	for _, id := range candidates {
+		changed[id] = true
+	}
+
+	invalidated, deferred, err := invalidatedItems(ctx, deps, rc, records, changed)
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, invalidated...)
 	workItems, partial := selectWork(candidates, rc)
 
 	// Tombstones need to have seen everything. A full-scope fetch establishes that upstream;
@@ -85,13 +99,52 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 			Modified:      len(d.Modified),
 			Deleted:       len(d.Deleted),
 			Unchanged:     len(d.Unchanged),
+			Invalidated:   len(invalidated),
+			Deferred:      deferred,
 			WorkItems:     workItems,
 			Tombstones:    tombstones,
 		},
 		tombstones: tombstones,
 		partial:    partial,
 		records:    records,
+		changed:    changed,
 	}, nil
+}
+
+// invalidatedItems is the pull half of the reference cascade (D12): the items of this datatype
+// carrying a staleness mark, capped at enrich.max_cascade_per_run.
+//
+// An item already in the work set is not counted twice, and an item absent from the artifact
+// run is skipped rather than enqueued: a marked item that has since been deleted upstream would
+// otherwise fail every run forever, since the claim loop cannot process what it cannot read.
+// Its mark is collected with the rest of its state by `inget state gc`.
+func invalidatedItems(ctx context.Context, deps Deps, rc RunConfig, records map[string]*artifact.Record, changed map[string]bool) ([]string, int, error) {
+	stale, err := deps.State.StaleReferrers(ctx, deps.Config.Name)
+	if err != nil {
+		return nil, 0, fmt.Errorf("reading invalidated %s items: %w", deps.Config.Name, err)
+	}
+	if len(stale) == 0 {
+		return nil, 0, nil
+	}
+
+	eligible := make([]string, 0, len(stale))
+	for _, s := range stale {
+		if changed[s.ItemID] {
+			continue
+		}
+		if _, ok := records[s.ItemID]; !ok {
+			slog.DebugContext(ctx, "invalidated item is not in the artifact run, skipping",
+				"datatype", deps.Config.Name, "item_id", s.ItemID, "depth", s.Depth)
+			continue
+		}
+		eligible = append(eligible, s.ItemID)
+	}
+	taken := refs.WithinCap(ctx, deps.Config.Name, eligible, rc.MaxCascadePerRun)
+	if len(taken) > 0 {
+		slog.InfoContext(ctx, "reference invalidations entering the work set",
+			"datatype", deps.Config.Name, "invalidated", len(taken), "deferred", len(eligible)-len(taken))
+	}
+	return taken, len(eligible) - len(taken), nil
 }
 
 // selectWork applies --only and --limit, reporting whether the result is a subset of what

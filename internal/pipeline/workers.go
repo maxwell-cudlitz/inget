@@ -30,6 +30,8 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 		gen:         newLimiter(rc.Concurrency),
 		derive:      &singleflight.Group{},
 		concurrency: max(rc.Concurrency, 1),
+		refDepth:    rc.MaxReferenceDepth,
+		changed:     result.changed,
 		stats:       stats,
 	}
 	if cfg.FragmentEnricher && deps.FragEnricher != nil {

@@ -134,6 +134,8 @@ func reportPlan(plan *pipeline.Plan) error {
 		"modified", plan.Modified,
 		"deleted", plan.Deleted,
 		"unchanged", plan.Unchanged,
+		"invalidated", plan.Invalidated,
+		"deferred", plan.Deferred,
 		"work_items", len(plan.WorkItems),
 		"tombstones", len(plan.Tombstones),
 		"fragment_derivations", est.FragmentDerivations,

@@ -66,10 +66,14 @@ func (g *recordingGenerator) reset() {
 
 // testDest is a destination that counts what it was asked to write. It is mutex-guarded
 // because the worker pool calls it from several goroutines at once.
+//
+// It keeps the rows as well as the count: what a row carries — its metadata, its related
+// reference keys — is part of the contract, and a counter cannot show that.
 type testDest struct {
 	mu          sync.Mutex
 	upsertCalls int
 	totalRows   int
+	written     []destination.Row
 	deleted     []string
 }
 
@@ -83,6 +87,7 @@ func (d *testDest) Upsert(_ context.Context, rows []destination.Row) error {
 	defer d.mu.Unlock()
 	d.upsertCalls++
 	d.totalRows += len(rows)
+	d.written = append(d.written, rows...)
 	return nil
 }
 
@@ -90,6 +95,7 @@ func (d *testDest) BulkLoad(_ context.Context, rows []destination.Row) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.totalRows += len(rows)
+	d.written = append(d.written, rows...)
 	return nil
 }
 
@@ -110,6 +116,13 @@ func (d *testDest) rows() int {
 	return d.totalRows
 }
 
+// rowsWritten returns a copy of the rows this destination was asked to write.
+func (d *testDest) rowsWritten() []destination.Row {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]destination.Row(nil), d.written...)
+}
+
 func (d *testDest) upserts() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -119,7 +132,7 @@ func (d *testDest) upserts() int {
 func (d *testDest) reset() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.upsertCalls, d.totalRows, d.deleted = 0, 0, nil
+	d.upsertCalls, d.totalRows, d.deleted, d.written = 0, 0, nil, nil
 }
 
 // Compile-time check that testDest implements destination.Destination.

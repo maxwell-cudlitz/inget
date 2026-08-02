@@ -102,6 +102,11 @@ type Checkpoint struct {
 	Item      Item
 	Fragments []FragmentState
 	Views     []ViewState
+	// Refs is the item's complete reference edge set as this run resolved it. It belongs in
+	// the same transaction as the guards because writing it is what clears the item's
+	// invalidation mark: committed on its own, it would report the item as re-resolved
+	// while the views that consumed the references were never regenerated.
+	Refs []RefEdge
 }
 
 // ItemKey identifies one item across datatypes. It is both the source of a reference edge
@@ -112,11 +117,24 @@ type ItemKey struct {
 }
 
 // RefEdge is one resolved reference from an item to something else.
+//
+// StaleDepth is the invalidation mark (D12): zero means the edge is current and Fingerprint
+// is the digest the referring item last consumed, while a positive value means a referent
+// changed and this item has not re-resolved yet. The value is the cascade depth the mark was
+// made at, so a cycle terminates at enrich.max_reference_depth instead of ping-ponging.
 type RefEdge struct {
 	Name        string // reference name from config
 	Kind        string // resolver kind: inget, http
 	Key         string // resolved key in the referent's namespace
-	Fingerprint string // referent's change token; "" when the resolver cannot supply one
+	Fingerprint string // digest of the fields pulled; "" when the referent did not resolve
+	StaleDepth  int    // 0 when current; the cascade depth of the mark otherwise
+}
+
+// StaleReferrer is one item whose references need re-resolving, and the cascade depth that
+// asked for it.
+type StaleReferrer struct {
+	ItemID string
+	Depth  int
 }
 
 // Run is the record of one process execution. Status and timestamps are managed by the

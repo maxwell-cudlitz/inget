@@ -62,6 +62,9 @@ type cascadeHarness struct {
 	emb   *model.FakeEmbedder
 	dest  *testDest
 	deps  Deps
+	// metadata is merged into every record the harness writes, which is how a reference test
+	// gives an item something for key_from to find.
+	metadata map[string]string
 }
 
 // newCascadeHarness builds the harness. State is sqlite in a temp dir and artifacts are
@@ -122,13 +125,16 @@ func newCascadeHarness(t *testing.T) *cascadeHarness {
 	}
 }
 
-// runConfig is the harness's standard RunConfig.
+// runConfig is the harness's standard RunConfig. The cascade bounds mirror the shipped
+// config.yaml defaults so that a test exercising references sees production behaviour.
 func (h *cascadeHarness) runConfig() RunConfig {
 	return RunConfig{
-		Binary:      "inget",
-		Concurrency: 4,
-		ConfigHash:  testConfig,
-		Pricing:     Pricing{PerMTokIn: 1, PerMTokOut: 2, MaxOutputTokens: 512},
+		Binary:            "inget",
+		Concurrency:       4,
+		ConfigHash:        testConfig,
+		Pricing:           Pricing{PerMTokIn: 1, PerMTokOut: 2, MaxOutputTokens: 512},
+		MaxReferenceDepth: 2,
+		MaxCascadePerRun:  5000,
 	}
 }
 
@@ -184,6 +190,9 @@ func (h *cascadeHarness) writeRunWithItems(version string, changedIdx int, chang
 	}
 	for _, itemID := range itemIDs {
 		rec, contents := buildCascadeRecord(itemID, version, changedIdx, changedVersion)
+		for k, v := range h.metadata {
+			rec.Metadata[k] = v
+		}
 		for _, content := range contents {
 			if _, _, err := h.arts.PutBlob(h.ctx, []byte(content)); err != nil {
 				h.t.Fatalf("putting blob: %v", err)
@@ -236,7 +245,7 @@ func buildCascadeRecord(itemID, version string, changedIdx int, changedVersion s
 		}
 	}
 
-	fingerprint := sha256Hex(itemID + ":" + version + ":" + strconv.Itoa(changedIdx) + ":" + changedVersion)
+	fingerprint := recordFingerprint(itemID, version, changedIdx, changedVersion)
 	return &artifact.Record{
 		SchemaVersion: artifact.SchemaVersion,
 		Datatype:      testDatatype,
@@ -284,6 +293,13 @@ func openTestArtifacts(t *testing.T, dir string) *artifact.Store {
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// recordFingerprint is the level-0 fingerprint buildCascadeRecord gives an item. It is exposed
+// so a test can seed state that reconciles as unchanged, which is how an item enters a work set
+// only because a reference invalidated it.
+func recordFingerprint(itemID, version string, changedIdx int, changedVersion string) string {
+	return sha256Hex(itemID + ":" + version + ":" + strconv.Itoa(changedIdx) + ":" + changedVersion)
 }
 
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }

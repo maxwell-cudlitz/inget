@@ -107,6 +107,8 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 			PerMTokOut:      gen.PricePerMTokOut,
 			MaxOutputTokens: gen.MaxOutputTokens,
 		},
+		MaxReferenceDepth: cfg.Enrich.MaxReferenceDepth,
+		MaxCascadePerRun:  cfg.Enrich.MaxCascadePerRun,
 	}
 
 	plan, stats, err := pipeline.Run(ctx, deps, arts, rc)

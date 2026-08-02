@@ -10,6 +10,8 @@ package config
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
@@ -150,11 +152,11 @@ func (c *Config) validateReferences(v *validator, parent string, refs []Referenc
 		path := listPath(parent+".references", i, r.Name)
 		names = append(names, r.Name)
 		v.required(path+".name", r.Name)
-		v.required(path+".key_from", r.KeyFrom)
 		v.enum(path+".inject_as", r.InjectAs, "fragment", "metadata")
 		if len(r.Fields) == 0 {
 			v.failf("%s.fields is required: a reference that pulls no fields is a no-op", path)
 		}
+		c.validateReferenceKey(v, path, r)
 		if !v.required(path+".resolver", r.Resolver) {
 			continue
 		}
@@ -170,6 +172,32 @@ func (c *Config) validateReferences(v *validator, parent string, refs []Referenc
 		}
 	}
 	v.unique(parent+".references", names)
+}
+
+// validateReferenceKey checks how a reference finds its key. The glob is checked with the
+// same matcher the delta engine uses, and the regexp both compiles and is required to have
+// exactly one capture group: a pattern with none extracts nothing and a pattern with two is
+// a reference whose key would depend on which group the code happened to read.
+func (c *Config) validateReferenceKey(v *validator, path string, r Reference) {
+	if v.required(path+".key_from", r.KeyFrom) {
+		if glob, ok := strings.CutPrefix(r.KeyFrom, "metadata:"); ok {
+			v.required(path+".key_from metadata field", glob)
+		} else if !doublestar.ValidatePattern(r.KeyFrom) {
+			v.failf("%s.key_from = %q is not a valid glob pattern or a metadata: reference",
+				path, r.KeyFrom)
+		}
+	}
+	if r.KeyRegex == "" {
+		return
+	}
+	re, err := regexp.Compile(r.KeyRegex)
+	if err != nil {
+		v.failf("%s.key_regex = %q: %v", path, r.KeyRegex, err)
+		return
+	}
+	if n := re.NumSubexp(); n != 1 {
+		v.failf("%s.key_regex = %q has %d capture groups, want exactly 1", path, r.KeyRegex, n)
+	}
 }
 
 // listPath renders a list element's path, preferring its name over its index because a

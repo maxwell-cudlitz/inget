@@ -13,6 +13,7 @@ import (
 	"github.com/maxwellcudlitz/inget/internal/config"
 	"github.com/maxwellcudlitz/inget/internal/destination"
 	"github.com/maxwellcudlitz/inget/internal/enrich"
+	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
 	"github.com/maxwellcudlitz/inget/internal/model"
 	"github.com/maxwellcudlitz/inget/internal/pipeline"
 	"github.com/maxwellcudlitz/inget/internal/state"
@@ -80,12 +81,20 @@ func buildDeps(ctx context.Context, cfg *config.Config, dt config.Datatype, dryR
 		}
 	}
 
+	// References resolve against the state store, so they are built after it and share it:
+	// a cross-record lookup reads the same rows this run is writing.
+	refSet, err := refs.New(dt.References, store, cfg.Secret)
+	if err != nil {
+		return fail(err)
+	}
+
 	deps := pipeline.Deps{
 		State:        store,
 		Destinations: dests,
 		Embedder:     emb,
 		Enrichers:    enrichers,
 		FragEnricher: fragEnricher,
+		Refs:         refSet,
 		Config: pipeline.DatatypeConfig{
 			Name:             dt.Name,
 			Source:           dt.Source,

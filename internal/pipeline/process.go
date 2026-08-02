@@ -3,31 +3,33 @@
 // Stages, matching the design's Enrichment Pipeline section:
 //  2. Read the item record and its persisted fragment state.
 //  3. Reconcile fragments (level-1 delta).
-//  4. Derive per-fragment artifacts, from cache where the level-1 key hits.
-//  5. Compose, per view, over the fragments that view depends on.
-//  6. Generate the views whose scoped input hash or signature moved.
-//  7. Annotate metadata.
-//  8. Embed the views whose text drifted past drift_threshold.
-//  9. Upsert to every configured destination.
-//  10. Checkpoint the item: every guard plus the work row, in one transaction.
+//  4. Resolve references, record their reverse edges, collect related keys (D12).
+//  5. Derive per-fragment artifacts, from cache where the level-1 key hits.
+//  6. Compose, per view, over the fragments and references that view depends on.
+//  7. Generate the views whose scoped input hash or signature moved.
+//  8. Annotate metadata.
+//  9. Embed the views whose text drifted past drift_threshold.
+//  10. Upsert to every configured destination.
+//  11. Checkpoint the item: every guard, its reference edges, and the work row, in one
+//     transaction, then tell the items referencing this one that it moved.
 //
-// Nothing durable is written until stage 10, and stage 10 runs after stage 9 returns. A
-// guard is a claim that the work below it happened, so an item that fails anywhere above
-// leaves state untouched and reconciles as changed on the next run. Fragment derivations
-// are the exception and are cached as they are produced: they are a cache rather than a
-// guard, and discarding paid-for tokens because a later view failed is the one outcome
-// worse than repeating the work.
-//
-// Stage 3 of the design (reference resolution, D12) is step 11's work and is absent here.
+// Nothing durable is written until the checkpoint, and the checkpoint runs after the upsert
+// returns. A guard is a claim that the work below it happened, so an item that fails anywhere
+// above leaves state untouched and reconciles as changed on the next run. Fragment derivations
+// are the exception and are cached as they are produced: they are a cache rather than a guard,
+// and discarding paid-for tokens because a later view failed is the one outcome worse than
+// repeating the work.
 package pipeline
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/maxwellcudlitz/inget/internal/artifact"
 	"github.com/maxwellcudlitz/inget/internal/delta"
+	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
 	"github.com/maxwellcudlitz/inget/internal/state"
 )
 
@@ -42,6 +44,11 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 	}
 	fragDelta := delta.Reconcile(fingerprints(cached), incoming(rec))
 
+	resolved, err := resolveReferences(ctx, ex, rec)
+	if err != nil {
+		return err
+	}
+
 	enriched, err := enrichFragments(ctx, ex, rec)
 	if err != nil {
 		return err
@@ -52,12 +59,15 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		return fmt.Errorf("loading views for %s/%s: %w", cfg.Name, itemID, err)
 	}
 
-	entries := buildComposeEntries(rec, enriched)
+	entries := append(buildComposeEntries(rec, enriched), resolved.Entries...)
 	out, err := processViews(ctx, ex, viewRequest{
 		itemID:      itemID,
 		entries:     entries,
-		changedKeys: changedKeys(fragDelta),
-		metadata:    annotateMetadata(cfg, rec),
+		changedKeys: append(changedKeys(fragDelta), resolved.ChangedKeys...),
+		anyChanged:  resolved.MetadataChanged,
+		refDigest:   resolved.Digest,
+		metadata:    annotateMetadata(cfg, rec, resolved),
+		relatedKeys: resolved.RelatedKeys,
 		existing:    viewStates,
 	})
 	if err != nil {
@@ -84,13 +94,78 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		},
 		Fragments: buildFragmentStates(rec),
 		Views:     out.views,
+		Refs:      resolved.Edges,
 	}
 	if err := ex.deps.State.CheckpointItem(ctx, cfg.Name, cp); err != nil {
 		return err
 	}
 
+	cascade(ctx, ex, itemID, resolved.Depth, len(out.rows) > 0)
 	ex.stats.addProcessed(1)
 	return nil
+}
+
+// resolveReferences is stage 4: look up this item's declared referents.
+//
+// A datatype with no references still returns a usable zero value, so the stages below it need
+// no branch. Fragment content is read lazily and only for the keys a key_from glob matched.
+func resolveReferences(ctx context.Context, ex *execution, rec *artifact.Record) (refs.Resolution, error) {
+	cfg := ex.deps.Config
+	from := state.ItemKey{Datatype: cfg.Name, ItemID: rec.ItemID}
+
+	if ex.deps.Refs == nil {
+		return refs.Resolution{}, nil
+	}
+	stored, err := ex.deps.State.Refs(ctx, from)
+	if err != nil {
+		return refs.Resolution{}, fmt.Errorf("loading reference edges of %s/%s: %w", cfg.Name, rec.ItemID, err)
+	}
+
+	blobs := make(map[string]artifact.Fragment, len(rec.Fragments))
+	keys := make([]string, 0, len(rec.Fragments))
+	for _, frag := range rec.Fragments {
+		blobs[frag.Key] = frag
+		keys = append(keys, frag.Key)
+	}
+
+	resolved, err := ex.deps.Refs.Resolve(ctx, refs.Input{
+		Datatype:  cfg.Name,
+		ItemID:    rec.ItemID,
+		Metadata:  rec.Metadata,
+		Fragments: keys,
+		Stored:    stored,
+		Content: func(ctx context.Context, key string) (string, error) {
+			return loadFragmentContent(ctx, ex.arts, blobs[key])
+		},
+	})
+	if err != nil {
+		return refs.Resolution{}, err
+	}
+	ex.stats.addReferences(len(resolved.Edges))
+	return resolved, nil
+}
+
+// cascade is the second half of stage 11: mark the items referencing this one.
+//
+// It runs only when the item published something — its own content changed, or a view was
+// re-embedded — because an item that resolved to exactly what it held before has nothing to
+// tell its referrers, and stopping there is what keeps a reference cycle from costing a
+// reprocess on every future run. A regeneration that kept its vector for low drift does not
+// count: the text a referrer would pull is still the text behind that vector (D4).
+//
+// A failure to mark is logged rather than returned: the item's own work is committed and
+// correct, and the next change to it will mark again.
+func cascade(ctx context.Context, ex *execution, itemID string, depth int, republished bool) {
+	if !ex.changed[itemID] && !republished {
+		return
+	}
+	// state.Store's method set covers refs.Store, so this is a compile-time check rather
+	// than an assertion that could fail at runtime.
+	var store refs.Store = ex.deps.State
+	if _, err := refs.Cascade(ctx, store, ex.deps.Config.Name, itemID, depth, ex.refDepth); err != nil {
+		slog.WarnContext(ctx, "cascading reference invalidation",
+			"datatype", ex.deps.Config.Name, "item_id", itemID, "error", err)
+	}
 }
 
 // fingerprints reduces persisted fragment state to the key → fingerprint map Reconcile
@@ -123,23 +198,39 @@ func changedKeys(d delta.Delta) []string {
 	return keys
 }
 
-// annotateMetadata is stage 7: the record's own metadata plus the datatype's configured
-// metadata_fields.
+// annotateMetadata is stage 8: the record's own metadata, the values any metadata-injected
+// reference resolved to, and the datatype's configured metadata_fields.
 //
-// A value containing "${" is an indirection the pipeline cannot resolve yet — the only one
-// the design defines is ${references.*.resolved_keys}, which needs reference resolution
-// (D12, step 11). Such fields are left out rather than written literally, so no destination
-// row ever carries an unexpanded placeholder as if it were data.
-func annotateMetadata(cfg DatatypeConfig, rec *artifact.Record) map[string]string {
-	metadata := make(map[string]string, len(rec.Metadata)+len(cfg.MetadataFields))
+// A metadata_fields value naming ${references.*.resolved_keys} is expanded from the resolved
+// keys; the design's own example is exactly that, and those keys also reach the destination's
+// typed related_keys column, which is what makes them GIN-queryable. Any other "${...}" value
+// is an indirection nothing resolves, and is left out rather than written literally so that no
+// destination row carries an unexpanded placeholder as if it were data.
+func annotateMetadata(cfg DatatypeConfig, rec *artifact.Record, resolved refs.Resolution) map[string]string {
+	metadata := make(map[string]string, len(rec.Metadata)+len(cfg.MetadataFields)+len(resolved.Metadata))
 	for k, v := range rec.Metadata {
 		metadata[k] = v
 	}
-	for k, v := range cfg.MetadataFields {
-		if strings.Contains(v, "${") {
-			continue
-		}
+	for k, v := range resolved.Metadata {
 		metadata[k] = v
 	}
+	for k, v := range cfg.MetadataFields {
+		switch {
+		case !strings.Contains(v, "${"):
+			metadata[k] = v
+		case isResolvedKeysRef(v):
+			if len(resolved.RelatedKeys) > 0 {
+				metadata[k] = strings.Join(resolved.RelatedKeys, ",")
+			}
+		}
+	}
 	return metadata
+}
+
+// isResolvedKeysRef reports whether a metadata_fields value asks for the resolved reference
+// keys, in either the wildcard or the named form.
+func isResolvedKeysRef(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "${references.") &&
+		strings.HasSuffix(trimmed, ".resolved_keys}")
 }

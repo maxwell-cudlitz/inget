@@ -9,6 +9,7 @@ import (
 	"github.com/maxwellcudlitz/inget/internal/artifact"
 	"github.com/maxwellcudlitz/inget/internal/delta"
 	"github.com/maxwellcudlitz/inget/internal/enrich"
+	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
 	"github.com/maxwellcudlitz/inget/internal/model"
 	"github.com/maxwellcudlitz/inget/internal/state"
 )
@@ -123,9 +124,10 @@ func TestAnnotateMetadata(t *testing.T) {
 	cfg := DatatypeConfig{MetadataFields: map[string]string{
 		"tier":         "internal",
 		"related_keys": "${references.*.resolved_keys}",
+		"unknown":      "${something.else}",
 	}}
 
-	got := annotateMetadata(cfg, rec)
+	got := annotateMetadata(cfg, rec, refs.Resolution{})
 
 	if got["full_name"] != "owner/repo" {
 		t.Errorf("record metadata was dropped: %v", got)
@@ -134,6 +136,9 @@ func TestAnnotateMetadata(t *testing.T) {
 		t.Errorf("static metadata field = %q, want %q", got["tier"], "internal")
 	}
 	if _, present := got["related_keys"]; present {
+		t.Error("a reference field must be omitted when nothing resolved, not written literally")
+	}
+	if _, present := got["unknown"]; present {
 		t.Error("an unresolved ${...} field must be omitted, not written literally")
 	}
 	// The record's own map must not be mutated: it belongs to the artifact reader.
