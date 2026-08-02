@@ -33,6 +33,9 @@ SELECT run_id FROM runs
 WHERE "binary" = ? AND COALESCE(datatype, '') = ? AND config_hash = ?
   AND status IN ('` + RunRunning + `', '` + RunInterrupted + `')
 ORDER BY run_id DESC LIMIT 1`
+
+	runStatusSQL = `
+SELECT status FROM runs WHERE run_id = ?`
 )
 
 // StartRun implements Store.
@@ -79,4 +82,14 @@ func (s *store) ResumableRun(ctx context.Context, binary, datatype, configHash s
 		return "", false, fmt.Errorf("looking for a resumable %s run: %w", binary, err)
 	}
 	return runID, found, nil
+}
+
+// RunStatus implements Store.
+func (s *store) RunStatus(ctx context.Context, runID string) (string, bool, error) {
+	var status string
+	found, err := s.get(ctx, runStatusSQL, []any{runID}, &status)
+	if err != nil {
+		return "", false, fmt.Errorf("reading status of run %s: %w", runID, err)
+	}
+	return status, found, nil
 }

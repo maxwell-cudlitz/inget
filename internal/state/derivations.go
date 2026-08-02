@@ -16,6 +16,12 @@ const (
 	derivationHitSQL = `
 UPDATE derivations SET last_hit_at = CURRENT_TIMESTAMP WHERE cache_key = ? RETURNING output`
 
+	// The read-only counterpart, for `inget plan`. Touching last_hit_at from a dry run would
+	// keep an entry alive that gc should be free to reclaim, so estimating cost would change
+	// what a later gc does.
+	derivationExistsSQL = `
+SELECT 1 FROM derivations WHERE cache_key = ?`
+
 	derivationUpsertSQL = `
 INSERT INTO derivations (cache_key, datatype, item_id, frag_key, signature, output)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -36,6 +42,16 @@ func (s *store) Derivation(ctx context.Context, cacheKey string) (string, bool, 
 		return "", false, fmt.Errorf("reading derivation %s: %w", cacheKey, err)
 	}
 	return output, found, nil
+}
+
+// HasDerivation implements Store.
+func (s *store) HasDerivation(ctx context.Context, cacheKey string) (bool, error) {
+	var present int
+	found, err := s.get(ctx, derivationExistsSQL, []any{cacheKey}, &present)
+	if err != nil {
+		return false, fmt.Errorf("checking derivation %s: %w", cacheKey, err)
+	}
+	return found, nil
 }
 
 // PutDerivation implements Store.

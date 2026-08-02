@@ -41,7 +41,17 @@ remaining implementation steps. Today:
 inget version
 inget --help
 inget migrate            # create the state schema and the vector tables
+inget plan [datatype]    # what a run would do, and what it would cost
+inget run  [datatype]    # enrich, embed, upsert
+
+# Both accept --only ID[,ID...] and --limit N; run also accepts --dry-run.
 ```
+
+`plan` reads only: it opens no destination, takes no lock, calls no model, and reports the
+fragment derivations, view generations, estimated tokens and cost a run would spend, plus any
+prompt or model change that has invalidated cached work. Its estimates are upper bounds. A run
+restricted by `--only` or `--limit` is recorded as a partial run and issues no tombstones,
+because an item it never looked at is not an item that was deleted.
 
 `migrate` is idempotent and needs the DSN variables config names. A local stack, from
 nothing:

@@ -72,14 +72,36 @@ type Derivation struct {
 }
 
 // ViewState is one generated view of one item, carrying the level-2 and level-3 guards.
+//
+// Text is the text the stored vector was produced from, not simply the last text
+// generated. The two differ whenever a regeneration drifted less than drift_threshold and
+// so was not re-embedded (D4): keeping the embedded text here makes the next drift
+// comparison measure distance from the vector rather than from the previous comparison,
+// which is what stops a sequence of sub-threshold changes from walking the text
+// arbitrarily far away from what was actually indexed.
 type ViewState struct {
 	Name         string
 	InputHash    string // level-2 guard, scoped to the view's dependency globs
-	Text         string
+	Text         string // the text behind EmbeddedHash's vector
 	EmbeddedHash string // level-3 guard; "" until embedded
 	Model        string // embedder that produced the vector
 	Dims         int
 	Signature    string
+}
+
+// Checkpoint is everything one item's successful processing changes in state: its level-0
+// token, its level-1 tokens, the guards of every view it touched, and the work row that
+// records it as done.
+//
+// It is one type because it is one transaction (design stage 10). Writing any part of it
+// before the destination upsert it attests to is how an item that failed halfway reports
+// itself as up to date: the next run reconciles it as unchanged and nothing regenerates
+// it until some unrelated fragment happens to change.
+type Checkpoint struct {
+	RunID     string
+	Item      Item
+	Fragments []FragmentState
+	Views     []ViewState
 }
 
 // ItemKey identifies one item across datatypes. It is both the source of a reference edge

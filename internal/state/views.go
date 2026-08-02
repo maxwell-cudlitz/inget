@@ -51,15 +51,25 @@ func (s *store) ViewState(ctx context.Context, datatype, itemID string) (map[str
 	return views, nil
 }
 
+// viewArgs builds the arguments of viewUpsertSQL. Shared by PutViewState and
+// CheckpointItem.
+func viewArgs(datatype, itemID string, v ViewState) ([]any, error) {
+	if v.Name == "" {
+		return nil, fmt.Errorf("view of %s/%s has no name", datatype, itemID)
+	}
+	return []any{
+		datatype, itemID, v.Name, v.InputHash, v.Text,
+		nullText(v.EmbeddedHash), nullText(v.Model), nullNumber(v.Dims), v.Signature,
+	}, nil
+}
+
 // PutViewState implements Store.
 func (s *store) PutViewState(ctx context.Context, datatype, itemID string, v ViewState) error {
-	if v.Name == "" {
-		return fmt.Errorf("view of %s/%s has no name", datatype, itemID)
-	}
-	_, err := s.exec(ctx, viewUpsertSQL,
-		datatype, itemID, v.Name, v.InputHash, v.Text,
-		nullText(v.EmbeddedHash), nullText(v.Model), nullNumber(v.Dims), v.Signature)
+	args, err := viewArgs(datatype, itemID, v)
 	if err != nil {
+		return err
+	}
+	if _, err := s.exec(ctx, viewUpsertSQL, args...); err != nil {
 		return fmt.Errorf("writing view %s of %s/%s: %w", v.Name, datatype, itemID, err)
 	}
 	return nil

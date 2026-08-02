@@ -74,6 +74,20 @@ func (t tx) exec(ctx context.Context, query string, args ...any) error {
 	return nil
 }
 
+// execAffected runs one statement inside the transaction and reports how many rows it
+// changed, for the callers where "changed nothing" is the error worth naming.
+func (t tx) execAffected(ctx context.Context, query string, args ...any) (int64, error) {
+	result, err := t.ExecContext(ctx, t.d.rebind(query), args...)
+	if err != nil {
+		return 0, fmt.Errorf("executing statement: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting affected rows: %w", err)
+	}
+	return affected, nil
+}
+
 // execMany prepares one statement and runs it once per argument row, which is how every
 // batch write here reaches the database: one round trip to prepare, one per row, all
 // committed together or not at all.

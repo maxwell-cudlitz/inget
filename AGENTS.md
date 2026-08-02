@@ -33,7 +33,7 @@ amended explicitly and the amendment is recorded in `docs/progress.md`.
 ## Layout
 
 ```
-cmd/inget/            enrichment entrypoint, plus the migrate subcommand  [migrate done]
+cmd/inget/            enrichment entrypoint: migrate, run, plan   [implemented]
 cmd/inget-fetch/      fetch entrypoint
 internal/cli/         shared cobra scaffolding: root command, version, --config, error exit
 internal/logging/     slog setup, secret redaction         [implemented]
@@ -42,11 +42,11 @@ internal/artifact/    envelope schema, manifest, shards, blob store [implemented
 internal/source/      connector registry (github/, monday/)
 internal/delta/       reconciliation, hashing, signatures, glob scoping [implemented]
 internal/state/       Store interface, postgres, sqlite         [implemented]
-internal/enrich/      pipeline stages, llm + passthrough enrichers, composer, refs
+internal/enrich/      enricher interface, llm + passthrough + fragment enrichers, prompts [implemented]
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   adaptive limiter, header parsers
-internal/pipeline/    orchestration, worker pool, checkpointing, signals
+internal/pipeline/    orchestration, worker pool, checkpointing, signals [implemented]
 migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
 deploy/               docker-compose  [implemented], k8s CronJob examples
@@ -83,6 +83,11 @@ not be a SQL database at all.
   `state.dialect`. Statements go through the helpers in `internal/state/store.go`, never
   straight to `*sql.DB`.
 - Tests are stdlib `testing`, table-driven, asserting behavior over implementation.
+- Prompts are files under `prompts/<source>/<datatype>/`, never string literals in Go. Each
+  one opens with a `{{- /* … */ -}}` maintainer comment (it renders to nothing but is part of
+  the signature), wraps ingested content in `<UNTRUSTED_DATA>` delimiters, and tells the model
+  the block is data with a worked example. Prompt bytes feed the enricher signature, so any
+  edit regenerates that view for every item.
 - Dependencies are pinned in `go.mod` and must be pure Go so binaries cross-compile
   statically. Prefer stdlib; see D15 for the approved library set.
 
@@ -256,3 +261,59 @@ require touching the pipeline.
   still checked everywhere; do not widen the glob further.
 - **Cost.** `inget plan` exists so no run spends money unexpectedly. Any change that can
   increase LLM calls must be visible there first.
+- **Guards are written after the work they attest to (`internal/pipeline/process.go`,
+  `internal/state/checkpoint.go`).** An item's fingerprint, fragment fingerprints and view
+  hashes all claim that generation, embedding and upsert already happened, so they go in one
+  `CheckpointItem` transaction after the upsert returns. Writing any of them earlier — the
+  natural-looking "persist the item, then process its views" order — makes an item that
+  failed halfway reconcile as unchanged on the next run, and nothing regenerates it until an
+  unrelated fragment happens to change. Derivations are the deliberate exception: they are a
+  cache, not a guard, and are written as they are produced so a later failure does not
+  discard paid-for tokens.
+- **The shutdown channel belongs to the signal handler (`internal/pipeline/workers.go`).**
+  `runWorkers` reads it from the context the caller wired to `NotifyShutdown`. A pool that
+  creates its own channel compiles, passes every test that calls `isShuttingDown` directly,
+  and never drains on SIGTERM, because nothing ever closes the channel it is watching.
+  `TestInterruptedRunResumesWithoutDuplicatingWork` is the regression guard.
+- **Views compose their own scope (`internal/pipeline/views.go`).** Each view is composed
+  over only the fragments its `depends_on` globs match, via `delta.MatchesAny`. Composing the
+  whole item once and handing it to every view puts a repository's entire contents in front of
+  a prompt asking about its build files, and makes every level-2 hash move whenever any
+  fragment moves — `delta.ViewInputHash` names its argument `scopedComposedHash` for that
+  reason. `TestCascadeScopesViewInputToDependencies` asserts the stack view never sees the
+  README.
+- **Drift is measured from the embedded text, not the last text
+  (`internal/pipeline/views.go`).** When a regeneration drifts less than `drift_threshold`,
+  `reuseVector` advances the level-2 hash but leaves `ViewState.Text` and `EmbeddedHash`
+  describing the stored vector. Updating `Text` there would make each comparison start from
+  the previous comparison, so a sequence of sub-threshold edits walks the view arbitrarily far
+  from what is indexed while every single step looks acceptable. A changed embedder model or
+  signature always forces a re-embed, whatever the drift.
+- **`models.generator.concurrency` is one shared budget (`internal/pipeline/limiter.go`).**
+  The fan-out is nested — the item pool spawns fragment derivations — so the permit set is
+  run-scoped and both stages draw from it. Applying the limit at each level instead
+  multiplies into `concurrency²` requests against a provider configured for `concurrency`.
+  Concurrent derivations of the same fragment are collapsed with `singleflight`, because two
+  items holding the same file at the same path is ordinary and the persisted cache cannot help
+  while both are in flight.
+- **A fragment prompt sees only its key and its content
+  (`internal/enrich/enricher.go`).** `FragmentTemplateData` carries no item metadata by
+  design: a derivation is cached under `delta.FragmentCacheKey(key, fingerprint, signature)`,
+  so anything else a prompt could read would be an input the key does not distinguish, and two
+  repositories holding the same file would share one summary written about the first of them.
+  Adding a field to that struct means adding it to the cache key.
+- **Prompt templates carry an injection guard, and it is part of the signature
+  (`prompts/`).** Ingested content is untrusted input (OWASP GenAI LLM01:2025, indirect
+  injection). Every template delimits it with `<UNTRUSTED_DATA>`, states that it is data, and
+  shows a worked example of an embedded instruction being described rather than obeyed;
+  `internal/enrich/prompts_test.go` fails if a template loses any of that. The guard text is
+  duplicated per file rather than shared through a partial: prompt bytes feed the enricher
+  signature, so each template's guard is versioned with the prompt it protects. Editing a
+  guard regenerates that view for every item, which is the correct consequence of changing a
+  prompt.
+- **The plan estimate probes the derivation cache per fragment
+  (`internal/pipeline/estimate.go`).** That is affordable when producing the estimate is the
+  point, and wasteful ahead of a run that is about to look the same keys up anyway, so only
+  dry-run mode calls `estimateWork`. Signature changes are surfaced on both paths, at one
+  query per view. Estimates are upper bounds: the level-2 guard can still skip a view whose
+  scoped composition turns out unchanged, and that cannot be known without deriving.

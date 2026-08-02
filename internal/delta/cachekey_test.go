@@ -6,21 +6,25 @@ import (
 )
 
 func TestFragmentCacheKey(t *testing.T) {
-	key := FragmentCacheKey("fp-abc123", "sha256:sig-def456")
+	key := FragmentCacheKey("cmd/root.go", "fp-abc123", "sha256:sig-def456")
 
 	if !strings.HasPrefix(key, "sha256:") {
 		t.Errorf("FragmentCacheKey = %q, want sha256: prefix", key)
 	}
 	// Same inputs produce the same key.
-	if key2 := FragmentCacheKey("fp-abc123", "sha256:sig-def456"); key != key2 {
+	if key2 := FragmentCacheKey("cmd/root.go", "fp-abc123", "sha256:sig-def456"); key != key2 {
 		t.Errorf("same inputs produced different keys:\n  %s\n  %s", key, key2)
 	}
 	// Different inputs produce different keys.
-	if diff := FragmentCacheKey("fp-other", "sha256:sig-def456"); diff == key {
+	if diff := FragmentCacheKey("cmd/root.go", "fp-other", "sha256:sig-def456"); diff == key {
 		t.Error("different fingerprint produced the same cache key")
 	}
-	if diff := FragmentCacheKey("fp-abc123", "sha256:sig-other"); diff == key {
+	if diff := FragmentCacheKey("cmd/root.go", "fp-abc123", "sha256:sig-other"); diff == key {
 		t.Error("different signature produced the same cache key")
+	}
+	// Identical content at a different path is a different prompt, so a different key.
+	if diff := FragmentCacheKey("internal/root.go", "fp-abc123", "sha256:sig-def456"); diff == key {
+		t.Error("different fragment key produced the same cache key")
 	}
 }
 
@@ -58,7 +62,7 @@ func TestEmbeddingHash(t *testing.T) {
 func TestCacheKeyLevelsDistinct(t *testing.T) {
 	// Even with the same string inputs, different level functions should produce
 	// different keys because they hash different structures.
-	l1 := FragmentCacheKey("a", "b")
+	l1 := FragmentCacheKey("a", "b", "c")
 	l2 := ViewInputHash("a", "b")
 	l3 := EmbeddingHash("a")
 

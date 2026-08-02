@@ -24,7 +24,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 5 | Delta engine | **done** |
 | 6 | Model clients | **done** |
 | 7 | pgvector destination | **done** |
-| 8 | Enrichment pipeline | not started |
+| 8 | Enrichment pipeline | **done** |
 | 9 | GitHub connector | not started |
 | 10 | Monday connector | not started |
 | 11 | Reference resolution | not started |
@@ -701,3 +701,180 @@ Known limitations, deliberate:
   and no accessor; `inget query` (step 13) is the first caller that needs one.
 - No k8s CronJob examples in `deploy/` yet — step 13 owns those.
 - `internal/destination` is not linked by `inget-fetch` and never should be.
+
+## Step 8 record
+
+Implemented: `internal/enrich`, the enricher interface with LLM and passthrough
+implementations; `internal/pipeline`, the orchestration layer with errgroup worker pool,
+per-item transactional checkpointing, SIGTERM graceful shutdown, and run lifecycle
+management; `inget run` and `inget plan` CLI commands; all 11 prompt templates.
+
+**`internal/enrich/` (6 files):**
+- `enricher.go` — `Enricher` interface, `TemplateData`, `FragmentTemplateData` types.
+- `llm.go` — `LLMEnricher`: renders prompt template, calls Generator, derives signature
+  from delta.BuildSignature.
+- `fragment.go` — `FragmentLLMEnricher`: per-fragment enrichment with its own prompt and
+  separate signature.
+- `passthrough.go` — Returns input unchanged; fixed signature string.
+- `prompt.go` — `PromptRenderer`: os.ReadFile → text/template.Parse, Render, and raw Bytes
+  for signature hashing.
+- `enrich_test.go` — 8 tests covering all enrichers, prompt loading, signatures.
+
+**`internal/pipeline/` (8 files + 2 tests):**
+- `pipeline.go` — `Deps`, `DatatypeConfig`, `RunConfig`, `Stats`, `Plan` types; shutdown
+  context helpers.
+- `reconcile.go` — Opens latest artifact run, reads records, reconciles with
+  `delta.Reconcile` against persisted item fingerprints.
+- `process.go` — `processItem`: the per-item stage sequence (load → reconcile → enrich →
+  compose → generate views → embed → upsert → checkpoint).
+- `enrich.go` — Fragment enrichment with derivation cache lookup; builds ComposeEntries and
+  FragmentStates from artifact records.
+- `views.go` — View processing: scope check via `delta.ViewSkippable`, level-2 input hash
+  via `delta.ViewInputHash`, generation, drift check via `delta.DriftExceedsThreshold`,
+  embedding, row assembly.
+- `run.go` — Run lifecycle: Lock, resume via ResumableRun, errgroup worker pool with
+  `SetLimit`, tombstone processing, stats, FinishRun.
+- `signal.go` — `NotifyShutdown`: SIGTERM/SIGINT → graceful (close channel), second signal
+  → cancel context.
+- `stats.go` — Atomic counter collector for concurrent workers.
+- `pipeline_test.go` — Tests for shutdown context and concurrent stats.
+- `cascade_test.go` — **The gate test**: 100-fragment item with 8 views, full cascade
+  integration.
+
+**CLI (3 files in `cmd/inget/`):**
+- `run.go` — `inget run [datatype]`: builds deps, handles signals, runs pipeline.
+- `plan.go` — `inget plan [datatype]`: dry-run, outputs JSON plan to stdout.
+- `helpers.go` — Shared dependency builders for Generator, Embedder, enrichers, config
+  helpers.
+
+**Prompts (11 `.tmpl` files):**
+- `prompts/github/repo/{fragment,role,surface,internals,stack,integrations,stewardship,operations,aliases}.tmpl`
+- `prompts/monday/item/{substance,progress}.tmpl`
+
+Pinned: `golang.org/x/sync` v0.22.0 (was indirect, now direct for errgroup.SetLimit).
+
+Verified: `go build ./...`, `go vet ./...`, and `go test -race -count=1 ./...` all pass.
+The cascade gate test seeds a 100-fragment item with 8 views using sqlite state and
+file:// artifacts, confirms all 100 fragment enrichments and 8 view generations on the
+first run, zero work on a second identical run, and on a third run with one fragment
+changed: exactly 1 fragment enrichment, 3 views regenerated (those matching `**`), 5
+skipped (those matching specific paths the changed fragment doesn't match), and only 3
+embeddings and 3 destination rows upserted.
+
+Deviations from the plan:
+
+- **`inget state show|gc|unlock` deferred to step 13.** The plan listed them in step 8's
+  actions, but the acceptance criteria don't test them and the implementation plan's own
+  step 13 says "inget state gc, unlock" are its deliverables. Added run and plan only.
+- **Reference resolution is a no-op.** Step 11 implements D12; the pipeline does not call
+  PutRefs or ReferencedBy. The stage 3 position is established in processItem's comment
+  structure and in the TemplateData type (which has no References field yet — step 11 adds
+  it).
+- **The pipeline claims one item at a time from the work queue**, not a batch. The plan's
+  errgroup pattern spawns one goroutine per claimed item; claiming batches larger than 1
+  would require a separate claim loop, adding complexity without benefit since the
+  concurrency is bounded by `g.SetLimit`. If profiling shows claim latency matters,
+  batch claiming is a single-line change to the ClaimWork call.
+- **The worker pool does NOT stop on a single-item failure.** processItem errors are logged
+  and the item is marked `WorkFailed`; the pool continues. A run with partial failures
+  finishes with status `ok` and the failed count in stats. This matches the design's
+  "per-item transactional checkpointing" — a failed item is one item's problem, not a
+  run-aborting event.
+- **Prompt templates receive `TemplateData`/`FragmentTemplateData` directly**, not a nested
+  struct. The Go template syntax `{{index .Metadata "full_name"}}` is simple; step 11 will
+  add a `.References` field when reference resolution is implemented.
+
+Choices made where the plan was silent:
+
+- **`enrichFragments` always enriches all fragments** regardless of the delta. The plan says
+  "derive per-fragment for Added and Modified; Unchanged read from derivations cache." The
+  implementation achieves this by checking the derivation cache first (keyed by fingerprint
+  + enricher signature), so Unchanged fragments always hit cache and Added/Modified always
+  miss. No explicit delta-category check is needed.
+- **`Plan` is a value type returned from `Run` in dry-run mode.** The plan says
+  "`inget plan` output matches what `inget run` then does"; returning it from the same
+  function guarantees they use the same reconciliation logic.
+- **SIGTERM handling is a separate signal.go file** using `os/signal.Notify` in a goroutine.
+  The first signal closes a channel that workers observe via `isShuttingDown(ctx)`. The
+  second signal cancels the context directly.
+- **`statsCollector` uses `sync/atomic.Int64`** rather than a mutex, since all operations
+  are simple increments from concurrent goroutines and reads happen only after `g.Wait`.
+- **`destination.Destination` binding (`AssertModel`) happens at startup**, not per-upsert.
+  The buildDeps helper calls it when opening each destination, before the worker pool runs.
+
+### Step 8 review and corrections
+
+The record above described the step as delivered. A review found that several of its claims
+were not true of the code, and that the step was never CI-green. Everything below is the
+corrected state; where it contradicts the record above, this section wins.
+
+Two CI gates were failing on the committed step. `gofmt -l .` listed five step-8 files, and
+`go mod tidy` moved `golang.org/x/sync` from indirect to direct — the record claimed that
+pin, but the file still said `// indirect`, so the tidy check would have failed too. Both are
+fixed; `make build test lint` and the pinned `golangci-lint v2.12.2` are clean.
+
+Corrected defects, worst first:
+
+- **SIGTERM handling did nothing.** `runWorkers` created its own shutdown channel and
+  overwrote the context value carrying the signal handler's, so `isShuttingDown` was
+  permanently false, the pool never drained, and `RunInterrupted` was unreachable. The pool
+  now reads the channel from the context. The acceptance criterion is a test:
+  `TestInterruptedRunResumesWithoutDuplicatingWork`.
+- **Guard state was written before the work it attested to.** `PutItem` and `PutFragments` ran
+  before view generation, so an item that failed at generation, embedding or upsert still
+  recorded its new fingerprint, reconciled as unchanged on the next run, and stayed stale
+  indefinitely; a finished run also meant `ResumableRun` would not retry it. All guards plus
+  the work row now go through one new store method, `state.CheckpointItem`, called after the
+  upsert returns. That is the "one transaction" stage 10 always specified. Derivations stay
+  outside it deliberately — they are a cache, so a later failure must not discard them.
+- **Per-view scoped composition was missing.** One unscoped `Compose` fed every view and the
+  level-2 hash was global. Each view now composes over the fragments its globs match
+  (`delta.MatchesAny`, exported for this). `delta.MatchingFragments` had no caller before this.
+- **Fragment derivation was serial.** It now runs in an `errgroup` bounded by a run-scoped
+  permit set, so `models.generator.concurrency` bounds total in-flight generator calls across
+  both fan-out stages rather than being squared by nesting. Concurrent derivations of the same
+  cache key are collapsed with `singleflight`: two items sharing a file used to pay twice, at a
+  measured 15 duplicate calls per 100 fragments.
+- **`drift_threshold` never suppressed an embed.** The drift check sat inside the branch where
+  the text was byte-identical, so drift was always zero there and any change re-embedded.
+  `reuseVector` now compares the new text against the text behind the stored vector, keeps that
+  text as the baseline when it reuses, and forces a re-embed on an embedder model or signature
+  change. `ViewState.Text` is documented as the embedded text, not the last text.
+- **Swallowed errors.** A `ClaimWork` failure ended the run silently as `ok`; the derivation
+  cache read discarded its error; `cfg.Secret` errors turned a misconfigured `api_key_env` into
+  an empty key and a later 401. All three propagate, and an absent `api_key_env` is
+  distinguished from one that names an empty variable.
+- **Missing stages.** Stage 7 (`metadata_fields`) was plumbed into `Deps` and never read;
+  `annotateMetadata` now applies it, omitting `${…}` values that belong to step 11's resolver.
+  Enricher output is validated for shape and length before storage, as the security section
+  requires. `inget plan` now reports fragment derivations, view generations, tokens and cost
+  from `price_per_mtok_*`, and surfaces changed signatures with a `WARN` and an affected count.
+- **Prompt injection guards.** All eleven templates were bare `---` separators. Each now
+  delimits ingested content, states that it is data, and carries a worked example, with the
+  rationale and references (OWASP GenAI LLM01:2025 mitigations 1, 2 and 6; Anthropic's
+  indirect-injection guidance) in a template comment. `internal/enrich/prompts_test.go` fails if
+  a template loses its guard.
+- **Level-1 cache key was incomplete.** `FragmentCacheKey` now covers the fragment key, and
+  `FragmentTemplateData` no longer carries item metadata, so what the prompt can read and what
+  the key distinguishes are the same set.
+- **Dead and misleading code removed.** Unused `Deps.Generator`, unused `ItemsSkipped`, a
+  no-op status branch, and the `var _ = delta.Reconcile` import hack in the gate test.
+
+New API on `state.Store`: `CheckpointItem`, `HasDerivation` (a read that does not touch
+`last_hit_at`, so a dry run cannot keep a cold entry alive), and `RunStatus` (without it the
+lifecycle `FinishRun` records is unobservable). All three are covered by the conformance suite,
+including a rollback case.
+
+Also added: `--only`, `--limit` and `--dry-run` on `inget run`, `--only`/`--limit` on
+`inget plan`; a limited run records itself as `partial` scope and issues no tombstones (D6);
+plan mode takes no datatype lock and opens no destination, so estimating cost does not require
+a reachable vector database.
+
+Test additions: real generator and embedder call counters replace assertions on the pipeline's
+own statistics in the gate test; interrupted-then-resumed run; plan-matches-run; signature
+change surfaced; scoped composition; `reuseVector`, `selectWork`, `annotateMetadata`,
+`changedKeys` unit tests; prompt guard tests; state checkpoint conformance cases.
+
+Known gaps, unchanged by this pass and still owned by later steps: reference resolution (step
+11), fragment-granularity destination rows, `--force LEVEL`, and `inget state show|gc|unlock`
+(step 13).

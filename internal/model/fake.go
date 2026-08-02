@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sync/atomic"
 )
 
 // Compile-time proof that the fakes stay substitutable for the real clients.
@@ -20,9 +21,12 @@ var (
 	_ Embedder  = (*FakeEmbedder)(nil)
 )
 
-// FakeGenerator returns deterministic text derived from the input prompt hash.
+// FakeGenerator returns deterministic text derived from the input prompt hash. It counts
+// its calls, so a test can assert that a cache hit cost nothing rather than inferring it
+// from a pipeline's own statistics.
 type FakeGenerator struct {
 	model string
+	calls atomic.Int64
 }
 
 // NewFakeGenerator creates a FakeGenerator with the given model identifier.
@@ -32,6 +36,7 @@ func NewFakeGenerator(model string) *FakeGenerator {
 
 // Generate returns a deterministic string derived from the SHA-256 of the prompt.
 func (f *FakeGenerator) Generate(_ context.Context, prompt string) (string, Usage, error) {
+	f.calls.Add(1)
 	h := sha256.Sum256([]byte(prompt))
 	text := fmt.Sprintf("fake-generation:%s", hex.EncodeToString(h[:16]))
 	usage := Usage{
@@ -42,15 +47,23 @@ func (f *FakeGenerator) Generate(_ context.Context, prompt string) (string, Usag
 	return text, usage, nil
 }
 
+// Calls reports how many times Generate has been called.
+func (f *FakeGenerator) Calls() int { return int(f.calls.Load()) }
+
+// ResetCalls zeroes the call counter between phases of a test.
+func (f *FakeGenerator) ResetCalls() { f.calls.Store(0) }
+
 // Signature returns a stable identifier for the fake generator.
 func (f *FakeGenerator) Signature() string {
 	return "fake:" + f.model
 }
 
-// FakeEmbedder returns deterministic unit vectors derived from input text hashes.
+// FakeEmbedder returns deterministic unit vectors derived from input text hashes. It counts
+// the texts it has embedded, which is what a test asserting "no re-embed" needs to see.
 type FakeEmbedder struct {
-	model string
-	dims  int
+	model    string
+	dims     int
+	embedded atomic.Int64
 }
 
 // NewFakeEmbedder creates a FakeEmbedder with the given model name and dimension count.
@@ -62,12 +75,19 @@ func NewFakeEmbedder(model string, dims int) *FakeEmbedder {
 // SHA-256 hash. The vector is constructed by expanding the hash into float32 values and
 // normalizing to unit length.
 func (f *FakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	f.embedded.Add(int64(len(texts)))
 	vecs := make([][]float32, len(texts))
 	for i, text := range texts {
 		vecs[i] = f.hashToVector(text)
 	}
 	return vecs, nil
 }
+
+// Embedded reports how many texts have been embedded.
+func (f *FakeEmbedder) Embedded() int { return int(f.embedded.Load()) }
+
+// ResetEmbedded zeroes the counter between phases of a test.
+func (f *FakeEmbedder) ResetEmbedded() { f.embedded.Store(0) }
 
 // Model returns the configured model identifier.
 func (f *FakeEmbedder) Model() string {

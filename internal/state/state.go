@@ -64,6 +64,11 @@ type Store interface {
 	// its last-hit timestamp.
 	Derivation(ctx context.Context, cacheKey string) (string, bool, error)
 
+	// HasDerivation reports whether a derivation is cached without touching its last-hit
+	// timestamp, which is what `inget plan` needs: estimating a run's cost must not change
+	// which entries a later gc considers cold.
+	HasDerivation(ctx context.Context, cacheKey string) (bool, error)
+
 	// PutDerivation caches one fragment derivation under its cache key.
 	PutDerivation(ctx context.Context, d Derivation) error
 
@@ -100,6 +105,11 @@ type Store interface {
 	// run computed may no longer be the right one.
 	ResumableRun(ctx context.Context, binary, datatype, configHash string) (string, bool, error)
 
+	// RunStatus returns a run's recorded status and whether the run exists. Without it the
+	// lifecycle FinishRun writes would be unobservable to any caller, and "the pod was
+	// evicted, so the run is interrupted" is a claim worth being able to check.
+	RunStatus(ctx context.Context, runID string) (string, bool, error)
+
 	// EnqueueWork adds items to a run's queue. Already-queued items are left untouched,
 	// so re-enqueueing on resume preserves what is already done.
 	EnqueueWork(ctx context.Context, runID, datatype string, ids []string) error
@@ -115,4 +125,10 @@ type Store interface {
 
 	// CompleteWork marks one item done, or failed with cause when cause is non-nil.
 	CompleteWork(ctx context.Context, runID, datatype, itemID string, cause error) error
+
+	// CheckpointItem writes an item's level-0, level-1, level-2 and level-3 guards and
+	// marks its work row done, in one transaction. It is how a pipeline run completes an
+	// item: the guards claim that generation, embedding and upsert already happened, so
+	// they must not become visible unless the work row does too.
+	CheckpointItem(ctx context.Context, datatype string, cp Checkpoint) error
 }

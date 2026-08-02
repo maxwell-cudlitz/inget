@@ -76,19 +76,30 @@ func (s *store) Item(ctx context.Context, datatype, itemID string) (Item, bool, 
 	return it, true, nil
 }
 
-// PutItem implements Store.
-func (s *store) PutItem(ctx context.Context, datatype string, it Item) error {
+// itemArgs builds the arguments of itemUpsertSQL, validating what the column constraints
+// cannot. Both PutItem and CheckpointItem go through it so the two cannot disagree about
+// what an item row is.
+func itemArgs(datatype string, it Item) ([]any, error) {
 	if it.ID == "" {
-		return fmt.Errorf("item of datatype %s has no ID", datatype)
+		return nil, fmt.Errorf("item of datatype %s has no ID", datatype)
 	}
 	metadata, err := marshalJSON(it.Metadata)
 	if err != nil {
-		return fmt.Errorf("item %s/%s: %w", datatype, it.ID, err)
+		return nil, fmt.Errorf("item %s/%s: %w", datatype, it.ID, err)
 	}
-	_, err = s.exec(ctx, itemUpsertSQL,
+	return []any{
 		datatype, it.ID, it.Source, it.Fingerprint,
-		nullText(it.ComposedHash), metadata, nullText(it.RunID))
+		nullText(it.ComposedHash), metadata, nullText(it.RunID),
+	}, nil
+}
+
+// PutItem implements Store.
+func (s *store) PutItem(ctx context.Context, datatype string, it Item) error {
+	args, err := itemArgs(datatype, it)
 	if err != nil {
+		return err
+	}
+	if _, err := s.exec(ctx, itemUpsertSQL, args...); err != nil {
 		return fmt.Errorf("writing item %s/%s: %w", datatype, it.ID, err)
 	}
 	return nil

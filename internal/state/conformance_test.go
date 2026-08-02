@@ -23,6 +23,7 @@ func conformanceCases() []storeCase {
 		signatureCases,
 		runCases,
 		workCases,
+		checkpointCases,
 		lockCases,
 	)
 }

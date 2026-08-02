@@ -17,5 +17,7 @@ func main() {
 			"upserts the result into a vector destination.",
 	},
 		migrateCommand(),
+		runCommand(),
+		planCommand(),
 	)
 }

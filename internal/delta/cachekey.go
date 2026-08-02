@@ -2,7 +2,8 @@
 //
 // Each level's key is a content-addressable hash of its inputs:
 //
-//   - Level 1 (fragment enrichment): hash of the fragment fingerprint and enricher signature.
+//   - Level 1 (fragment enrichment): hash of the fragment key, its fingerprint, and the
+//     enricher signature.
 //   - Level 2 (view composition): hash of the scoped composed hash and the view prompt signature.
 //   - Level 3 (embedding): hash of the actual view text.
 //
@@ -15,10 +16,17 @@ import (
 	"encoding/hex"
 )
 
-// FragmentCacheKey derives the Level 1 cache key from a fragment's fingerprint and the
-// enricher signature under which it would be processed.
-func FragmentCacheKey(fragmentFingerprint, enricherSignature string) string {
-	return hashWithDomain("L1", fragmentFingerprint, enricherSignature)
+// FragmentCacheKey derives the Level 1 cache key from a fragment's key, its fingerprint,
+// and the enricher signature under which it would be processed.
+//
+// The fragment key is part of the hash because the fragment prompt receives it: a file
+// path is context the model uses, so two fragments with identical content at different
+// paths are different prompts and must not share one cached derivation. Nothing else
+// about the item reaches that prompt — FragmentTemplateData carries only the key and the
+// content — which is what keeps the derivation cache shareable across items that hold the
+// same file at the same path.
+func FragmentCacheKey(fragmentKey, fragmentFingerprint, enricherSignature string) string {
+	return hashWithDomain("L1", fragmentKey, fragmentFingerprint, enricherSignature)
 }
 
 // ViewInputHash derives the Level 2 cache key from the scoped composed hash (the hash
