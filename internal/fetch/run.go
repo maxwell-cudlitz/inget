@@ -22,9 +22,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/source"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // Run executes one fetch and returns what it did. A dry run enumerates, applies the level-0

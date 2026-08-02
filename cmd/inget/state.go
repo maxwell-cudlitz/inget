@@ -13,9 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // defaultRunHistory is how many runs `state show` reports per datatype.

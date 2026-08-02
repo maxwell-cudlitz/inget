@@ -6,7 +6,7 @@
 // reindex, query and the state group.
 package main
 
-import "github.com/maxwellcudlitz/inget/internal/cli"
+import "github.com/maxwell-cudlitz/inget/internal/cli"
 
 func main() {
 	cli.Execute(cli.App{

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/maxwellcudlitz/inget/internal/destination"
-	"github.com/maxwellcudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/destination"
+	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 // recordingGenerator is a deterministic generator that counts its calls and keeps the prompts

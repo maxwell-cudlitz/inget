@@ -1,3 +1,9 @@
+// Tests for the pipeline's shutdown signal and run statistics.
+//
+// ShuttingDown is read from the context the caller wired to NotifyShutdown, so it is
+// asserted before, at and after channel close — a pool watching a channel nobody closes
+// passes every other test and never drains on SIGTERM. The stats collector is asserted
+// under concurrent writers, since every worker reports into it.
 package pipeline
 
 import (

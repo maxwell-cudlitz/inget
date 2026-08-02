@@ -16,7 +16,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 )
 
 const (

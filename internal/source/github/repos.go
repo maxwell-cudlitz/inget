@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // perPage is the API maximum for every collection this connector walks. Fewer, larger pages

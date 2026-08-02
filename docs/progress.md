@@ -30,7 +30,7 @@ from this file plus the named design line ranges, without reading all 1353 lines
 | 11 | Reference resolution | **done** |
 | 12 | Quality harness | **done** |
 | 13 | Reindex and operations | **done** |
-| 14 | Release and documentation | not started |
+| 14 | Release and documentation | **done** |
 
 Sizing note: steps 5, 8, 9 and 10 carry more surface than one session should hold. Plan on
 splitting each into an implementation session and a test-hardening session, so expect
@@ -64,7 +64,7 @@ everything below the edit, so regenerate the map with
 
 ## Step 1 record
 
-Implemented: module `github.com/maxwellcudlitz/inget`; `internal/logging` (slog JSON/text,
+Implemented: module `github.com/maxwell-cudlitz/inget`; `internal/logging` (slog JSON/text,
 `LOG_LEVEL`/`LOG_FORMAT`/`LOG_DESTINATION`/`LOG_REDACT`, key-pattern redaction);
 `internal/cli` (shared root, `version` with ldflags stamps and build-info fallback, single
 outermost error handler); both `cmd/` entrypoints; `Makefile`; `.golangci.yml`
@@ -448,6 +448,9 @@ Choices made where the plan was silent:
 
 Nothing. Every library question raised through step 14 is decided and recorded in D15.
 Raise new ones here rather than deciding them inside a step.
+
+The module path mismatch raised during step 14 was resolved in that step: the module is
+`github.com/maxwell-cudlitz/inget`, matching the remote, so `go install` resolves.
 
 ## Step 6 record
 
@@ -1503,3 +1506,118 @@ division is: reindex owns the model binding and the vectors, `run` owns the text
   embedding call, but batches run in sequence, so a large corpus is bounded by embedder latency
   rather than by throughput. The work-claiming design already supports several processes running the
   pass at once, which is the cheaper way to fix it than a worker pool inside one.
+
+## Step 14 record
+
+Implemented: `.goreleaser.yaml` (two builds, one archive carrying both binaries plus
+`config.yaml` and `prompts/`, checksums, a git-derived changelog, `dockers_v2` publishing one
+multi-arch image, `homebrew_casks` publishing to a tap); `Dockerfile` (distroless static
+pinned by index digest, both binaries, prompts, `WORKDIR /opt/inget`, `USER nonroot`);
+`.github/workflows/release.yaml` (tag-triggered: vet and test, then buildx, ghcr login and
+goreleaser pinned to v2.17.1); `make release-check|release-snapshot|release-install`; `dist/`
+in `.gitignore`. Documentation: the README's status block, install section and a new
+Releasing section; AGENTS.md gained a Releasing section, the new files in the layout, and four
+release hazards. Twelve test files that lacked a top block comment got one; a sweep found no
+exported symbol without a doc comment.
+
+Two defects in earlier steps were fixed while verifying this one. `deploy/kubernetes/base.yaml`
+named `prompts/github/repo/{fragment,role}.md`, but the files are `.tmpl` — validation checks
+config syntax, not that a prompt exists, so it would have failed at the first `inget run`
+rather than at load. And every manifest pinned `ghcr.io/maxwellcudlitz/inget`, a namespace this
+repository's workflow token cannot write to; they now name `ghcr.io/maxwell-cudlitz/inget`.
+
+Verified: `gofmt -l .` clean, `go vet ./...` clean, `golangci-lint run` (v2.12.2) reports 0
+issues, `go test -race -count=1 ./...` passes, `make build` produces both binaries.
+`goreleaser check` validates the configuration, and `goreleaser release --snapshot --clean`
+completed on an arm64 Mac: 8 binaries, 4 archives, `checksums.txt`, the rendered cask, and both
+platform images built locally. Then, against the artifacts rather than the source tree:
+
+- the darwin/arm64 archive extracts to a self-sufficient directory — both binaries report
+  their version, `inget migrate` and `inget plan` load the bundled `config.yaml` and fail only
+  on absent credentials, and all eleven prompt paths that configuration names resolve inside
+  the archive;
+- the image runs `inget version` and `inget-fetch version`, reports `WORKDIR /opt/inget`,
+  `USER nonroot:nonroot` and `INGET_CONFIG=/etc/inget/config.yaml`, and carries all eleven
+  prompt templates at `/opt/inget/prompts`;
+- the rendered cask points at `github.com/maxwell-cudlitz/inget` releases, declares both
+  binaries, and carries the quarantine-clearing postflight block.
+
+Cross-platform builds were confirmed to need no QEMU: the linux/amd64 image built on an arm64
+host, because the Dockerfile only copies and never executes.
+
+### A cask, not a formula
+
+The plan says "Homebrew tap formula". goreleaser deprecated `brews` in favour of
+`homebrew_casks`, and Homebrew's own guidance is that a tap shipping pre-built binaries ships
+casks; `brews` is scheduled to disappear in goreleaser v3. Following the tool costs one thing:
+a cask is macOS-only, so Linux users take the archive or the image, which is what the README
+now says. The other consequence is Gatekeeper. An unsigned binary installed from a cask is
+quarantined and reports "inget is damaged and cannot be opened", so the cask clears the
+attribute in a postflight hook. That bypasses Apple's verification and is documented as such in
+the caveats and in the README's security notes; the alternative is a paid Developer certificate
+and notarization, which is not a decision a release step should make on its own.
+
+### Choices made where the plan was silent
+
+- **No Windows target.** linux and darwin, amd64 and arm64. Nothing in the project has ever
+  been run on Windows, the deployment target is a Linux container and the development target is
+  a Mac, and shipping a binary nobody has executed is worse than not shipping it. Every
+  dependency is pure Go, so adding `goos: windows` later is a one-line change plus a test pass.
+- **The archives carry `prompts/` and `config.yaml`.** Migrations are embedded and prompts are
+  not — `enrich.LoadPrompt` reads the path each view names — so a download of binaries alone
+  cannot run. That also decided the image layout: `prompts/` is copied in and `WORKDIR` is
+  `/opt/inget`, which is what makes the relative paths in a mounted config resolve. Embedding
+  prompts would remove the whole problem and would also make the shipped bytes unmodifiable,
+  which contradicts the reason they are files; it is a design question, not a packaging one.
+- **No config.yaml in the image.** The repository's copy names localhost endpoints, wrong in
+  every container. A missing file fails at load naming the path it wanted, which is a better
+  first run than a silent connection to nothing, and `INGET_CONFIG` already points where the
+  manifests mount theirs.
+- **One image with both binaries.** The manifests choose with `command`, so the fetch job and
+  the run job pull the same layers and cannot be version-skewed across one artifact envelope.
+  Two images would halve each pull and double the tag surface for no other gain.
+- **The base image is pinned by index digest, not by tag.** `nonroot` moves, and an image that
+  rebuilds onto an untested base is the failure a pin exists to prevent. It must be the
+  top-level index digest: a per-platform digest would drop an architecture from the manifest.
+- **No QEMU in the release workflow.** Nothing is executed for the target platform, so
+  emulation buys nothing but minutes. This is only true while the Dockerfile has no `RUN`, and
+  the comment in the workflow says so.
+- **goreleaser is pinned to v2.17.1**, in the workflow and in the Makefile, exactly as
+  golangci-lint is. A release pipeline that changes underneath a tag is not a pipeline.
+- **`mod_timestamp` is the commit timestamp.** Two builds of one tag otherwise differ by the
+  mtime embedded in the binary, which makes checksums unreproducible for no reason.
+- **The changelog is read from git, not from the GitHub API.** History here is linear commits
+  on main — `step N: <goal>` — so a pull-request-based changelog would be empty.
+- **`skip_upload: auto` on the cask, and no `latest` for a prerelease.** Tagging `v0.1.0-rc.1`
+  publishes binaries and an image but must not hand every `brew upgrade` a release candidate or
+  redirect an unqualified `docker pull`.
+- **The release workflow re-runs vet and the suite.** CI already ran them on main, but a tag can
+  be pushed at any commit, and a release is the one build that cannot be taken back.
+
+### Known gaps
+
+- **No release has been published, so the acceptance criterion is unproven end to end.** What
+  was verified is everything up to the push: the configuration validates, every artifact builds,
+  and each one was inspected or executed. What cannot be verified from here is `brew install` on
+  a clean machine, the ghcr push, and the tap commit — all three need a tag, a published tap
+  repository and the `HOMEBREW_TAP_TOKEN` secret. Cut `v0.1.0` once the tap exists and read the
+  workflow log rather than assuming.
+- **The tap repository does not exist yet.** goreleaser commits into
+  `maxwell-cudlitz/homebrew-tap`; it does not create it. Until then the cask step fails after
+  the binaries and the image are already published, which is recoverable by re-running the job.
+- **`deploy/kubernetes/` still pins `v0.1.0`.** Correct once that tag is cut, wrong at every
+  later version: manifests and releases are versioned separately here, so a bump has to reach
+  both.
+- **The module path still disagreed with the repository owner when this record was first
+  written, and was renamed immediately after.** The module is now
+  `github.com/maxwell-cudlitz/inget`: `go mod edit -module`, the import in 93 files, the `-X`
+  paths in the Makefile and `.goreleaser.yaml`, and the wrapcheck glob in `.golangci.yml`. Test
+  fixtures that use `maxwellcudlitz/...` as a synthetic item ID were left alone — they are
+  arbitrary strings, not references to this repository.
+- **The Kubernetes manifests remain unvalidated against an API server**, unchanged from step 13,
+  except that the image they name is now one a release can actually publish and the prompt paths
+  in the ConfigMap now match files that exist.
+- **The image is not signed, and its SBOM attestation is unverified.** `dockers_v2` attaches
+  one by default, but a snapshot build pushes no attestations, so nothing here has confirmed it
+  lands. Cosign with GitHub OIDC would add signing; it needs `id-token: write` and a decision
+  about key policy, which is not this step's to make.

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // metric returns the named metric from a report.

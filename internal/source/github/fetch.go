@@ -16,7 +16,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // warnedPathLimit bounds how many individual paths a warning names before it summarizes. A

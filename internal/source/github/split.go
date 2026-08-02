@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // maxParts bounds how many pieces one file may become. A file large enough to exceed it is

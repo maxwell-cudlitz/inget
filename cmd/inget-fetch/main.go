@@ -14,8 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/maxwellcudlitz/inget/internal/cli"
-	_ "github.com/maxwellcudlitz/inget/internal/source/github" // registers the github driver
+	"github.com/maxwell-cudlitz/inget/internal/cli"
+	_ "github.com/maxwell-cudlitz/inget/internal/source/github" // registers the github driver
 )
 
 func main() {

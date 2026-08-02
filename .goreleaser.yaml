@@ -1,0 +1,186 @@
+# Release pipeline: cross-compiled binaries, one multi-arch image, one Homebrew cask.
+#
+# Every dependency of this module is pure Go, so CGO_ENABLED=0 produces static binaries for
+# every target without a cross toolchain and without a build container. That is why there is
+# no builder stage anywhere here: goreleaser compiles once per platform and the Dockerfile
+# only copies the result.
+#
+# Two things are deliberately shared with the Makefile rather than restated: the -X paths
+# that stamp internal/cli, and the -trimpath -s -w flags. `make build` and a release build
+# must produce the same `inget version` output, differing only in the version string.
+#
+# Validate a change here with `make release-check`, and prove it end to end with
+# `make release-snapshot`, which writes dist/ and builds the image locally without pushing.
+version: 2
+
+project_name: inget
+
+builds:
+  # Both binaries are built from one module with identical flags. They are separate entries
+  # rather than one entry with two mains because goreleaser keys artifacts by build ID, and
+  # the archive, the image and the cask all need to name them.
+  #
+  # The -X paths are the Go import path and must track any module rename; the image and tap
+  # below are keyed by GitHub owner. They agree today, and both have to be changed together
+  # if the repository ever moves.
+  - id: inget
+    main: ./cmd/inget
+    binary: inget
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Version={{ .Version }}
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Commit={{ .ShortCommit }}
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Date={{ .CommitDate }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # Reproducibility: without this the binary's mtime is the build time, so two builds of
+    # one tag differ. The commit timestamp is the only date in a tag that is not "now".
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: inget-fetch
+    main: ./cmd/inget-fetch
+    binary: inget-fetch
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Version={{ .Version }}
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Commit={{ .ShortCommit }}
+      - -X github.com/maxwell-cudlitz/inget/internal/cli.Date={{ .CommitDate }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  # One archive carries both binaries, because neither is useful alone: inget-fetch writes
+  # artifacts nothing reads and inget reads artifacts nothing wrote.
+  #
+  # prompts/ and config.yaml are in here because they are not embedded. Migrations are
+  # (migrations/embed.go), prompt templates are not: enrich.LoadPrompt reads the path each
+  # view names, so a download without prompts/ fails at the first `inget run`. Paths in
+  # config.yaml are relative, so the archive is meant to be extracted and run from its own
+  # directory, or to have those paths made absolute.
+  - id: default
+    ids: [inget, inget-fetch]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - README.md
+      - LICENSE
+      - config.yaml
+      - prompts/**/*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  # Read from git rather than from the GitHub API: the release history is linear commits on
+  # main, not merged pull requests, so a PR-based changelog would be empty.
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^Merge "
+
+dockers_v2:
+  # One image with both binaries. The manifests in deploy/kubernetes/ select which to run
+  # with `command`, so a job that fetches and a job that enriches pull the same layer and
+  # the pair can never be version-skewed against one artifact envelope.
+  - id: inget
+    ids: [inget, inget-fetch]
+    images:
+      - ghcr.io/maxwell-cudlitz/inget
+    # The `v` prefix is kept: deploy/kubernetes/ pins ghcr.io/maxwell-cudlitz/inget:vX.Y.Z,
+    # and .Version has it stripped. `latest` is skipped for prereleases so that a release
+    # candidate cannot become the default pull.
+    tags:
+      - "v{{ .Version }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    # The build context is a temporary directory holding only the built binaries, so
+    # anything else the Dockerfile copies has to be listed. prompts/ is not embedded.
+    extra_files:
+      - prompts
+    labels:
+      org.opencontainers.image.title: inget
+      org.opencontainers.image.description: Incremental source-to-vector ingestion
+      org.opencontainers.image.url: https://github.com/maxwell-cudlitz/inget
+      org.opencontainers.image.source: https://github.com/maxwell-cudlitz/inget
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+
+homebrew_casks:
+  # A cask, not a formula: goreleaser deprecated `brews` in favour of `homebrew_casks`, and
+  # Homebrew's own guidance is that a tap distributing pre-built binaries ships casks. The
+  # consequence is that this path is macOS-only — Linux users take the archive or the image.
+  - name: inget
+    binaries:
+      - inget
+      - inget-fetch
+    homepage: https://github.com/maxwell-cudlitz/inget
+    description: Incremental source-to-vector ingestion with an invalidation cascade
+    repository:
+      owner: maxwell-cudlitz
+      name: homebrew-tap
+      # A workflow's GITHUB_TOKEN is scoped to this repository, so pushing the cask to the
+      # tap needs a separate token with contents:write there.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # A prerelease must not move the tap: `brew upgrade` would hand every user a release
+    # candidate.
+    skip_upload: auto
+    # These binaries are not signed or notarized — Apple charges yearly for that — so macOS
+    # quarantines them and reports "inget is damaged and cannot be opened" on first run.
+    # Clearing the attribute at install time is the documented alternative. It bypasses
+    # Gatekeeper's verification, which is exactly why the caveat below says so out loud.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/inget"]
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/inget-fetch"]
+          end
+    caveats: |
+      These binaries are unsigned; the cask clears macOS quarantine on them at install time.
+
+      A cask installs binaries only. inget also needs a config.yaml and the prompt templates
+      it names, neither of which is embedded:
+
+        git clone https://github.com/maxwell-cudlitz/inget
+        cd inget && cp config.yaml config.local.yaml
+
+      Run from that directory, or point INGET_CONFIG at a config.yaml whose prompt paths are
+      absolute. `inget version` and `inget --help` work anywhere.
+
+release:
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```bash
+    brew install maxwell-cudlitz/tap/inget
+    docker pull ghcr.io/maxwell-cudlitz/inget:{{ .Tag }}
+    ```
+
+    The archives carry both binaries plus `config.yaml` and `prompts/`, which are read from
+    disk rather than embedded.

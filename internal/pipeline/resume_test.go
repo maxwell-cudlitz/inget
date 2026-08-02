@@ -5,7 +5,7 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // TestInterruptedRunResumesWithoutDuplicatingWork covers the pod-eviction path. Shutdown is

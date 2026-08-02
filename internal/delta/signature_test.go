@@ -1,3 +1,9 @@
+// Tests for signature construction (D2).
+//
+// A signature that omits an input serves stale generated data with no error anywhere, so
+// TestBuildSignatureCoversEveryField walks SignatureInput by reflection and fails when
+// mutating any field leaves the digest unchanged. Adding a field to that struct without
+// encoding it is what this test exists to catch.
 package delta
 
 import (

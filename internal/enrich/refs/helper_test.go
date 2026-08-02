@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 const (

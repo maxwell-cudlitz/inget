@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // Visibility values the domain block accepts, matching the GitHub API's own vocabulary.

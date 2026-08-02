@@ -1,3 +1,8 @@
+// Tests for the deterministic fakes CI depends on (D14).
+//
+// The whole pipeline is testable without credentials only while these stay deterministic,
+// so identical input must give an identical string and an identical unit vector across
+// runs, and the fake embedder must honour the configured width.
 package model
 
 import (

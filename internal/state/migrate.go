@@ -14,7 +14,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/maxwellcudlitz/inget/migrations"
+	"github.com/maxwell-cudlitz/inget/migrations"
 )
 
 // Migrate applies every pending migration for the driver. It is idempotent: applying an

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // fixtureConfig loads testdata/config.yaml with the destination DSN present.

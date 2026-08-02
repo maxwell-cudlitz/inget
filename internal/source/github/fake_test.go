@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/ratelimit"
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/ratelimit"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // fixture is one repository: its metadata, its files, and whether its tree overran the API's cap.

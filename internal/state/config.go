@@ -9,7 +9,7 @@ package state
 import (
 	"fmt"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // FromConfig converts the state block into store options. The DSN is only required by the

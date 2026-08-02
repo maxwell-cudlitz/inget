@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // serviceFiles is a repository shaped like a real one: some content worth indexing, and a

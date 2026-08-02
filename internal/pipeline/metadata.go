@@ -10,8 +10,8 @@ package pipeline
 import (
 	"strings"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/enrich/refs"
 )
 
 // AnnotateMetadata merges an item's own metadata with the datatype's configured

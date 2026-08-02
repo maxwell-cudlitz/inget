@@ -9,7 +9,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // at returns the unit vector at the given angle in degrees.

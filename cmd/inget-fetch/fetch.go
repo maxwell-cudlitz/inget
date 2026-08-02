@@ -21,11 +21,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/cli"
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/fetch"
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/cli"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/fetch"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // fetchOptions are the command's flags.

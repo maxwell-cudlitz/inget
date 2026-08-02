@@ -19,7 +19,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maxwellcudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
 )
 
 // metadataPrefix marks a key_from that reads item metadata rather than fragment content.

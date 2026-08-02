@@ -25,9 +25,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // Store is the slice of state.Store this package needs, declared by the consumer so that a

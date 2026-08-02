@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 )
 
 func TestRunCommitsEveryEnumeratedItem(t *testing.T) {

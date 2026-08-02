@@ -8,7 +8,7 @@ package eval
 import (
 	"math"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // Metric names, as they appear in the report and in the config threshold keys.

@@ -14,9 +14,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maxwellcudlitz/inget/internal/cli"
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/pipeline"
+	"github.com/maxwell-cudlitz/inget/internal/cli"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/pipeline"
 )
 
 // runOptions are the flags run and plan share.

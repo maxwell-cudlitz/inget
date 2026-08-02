@@ -14,7 +14,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // Driver names.

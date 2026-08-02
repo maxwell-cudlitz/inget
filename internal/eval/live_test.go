@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 // Environment for the live embedder. Only the URL is required; the rest default to the shipped

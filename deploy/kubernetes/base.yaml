@@ -23,6 +23,11 @@ metadata:
 # config.yaml with the endpoints and the artifact store pointed at cluster addresses; keep the two
 # in sync by generating this from the file rather than editing both.
 #
+# Prompt paths here are relative and resolve against the image's working directory, /opt/inget,
+# where the published image carries prompts/ — they are read from disk, not embedded. Iterating on a
+# prompt without rebuilding the image means mounting your own over /opt/inget/prompts, or naming
+# absolute paths here.
+#
 # Layering still applies inside the pod: environment variables beat this file, so a per-CronJob
 # override needs no second ConfigMap. INGET_MODELS__EMBEDDER__MODEL, for instance, changes the
 # embedder for one job without touching the mounted configuration.
@@ -115,13 +120,13 @@ data:
         destinations: [pgvector]
         fragment_enricher:
           enabled: true
-          prompt: prompts/github/repo/fragment.md
+          prompt: prompts/github/repo/fragment.tmpl
           max_input_chars: 40000
         compose: {order: tier, max_chars: 120000}
         metadata_fields:
           related_keys: "${references.*.resolved_keys}"
         views:
-          - {name: role, prompt: prompts/github/repo/role.md, depends_on: ["**"]}
+          - {name: role, prompt: prompts/github/repo/role.tmpl, depends_on: ["**"]}
 ---
 # Placeholder credentials. Every key is named by the configuration above, so rotating one is a
 # Secret update and a restart, not a config change.

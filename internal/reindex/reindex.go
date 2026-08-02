@@ -26,9 +26,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/maxwellcudlitz/inget/internal/destination"
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/destination"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // Binary is the name reindex records on its run rows. It is distinct from "inget" so that a

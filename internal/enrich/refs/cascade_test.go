@@ -9,7 +9,7 @@ package refs
 import (
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // edgeTo returns an edge from an item to one persisted record.

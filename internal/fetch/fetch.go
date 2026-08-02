@@ -19,9 +19,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/source"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // Deps are the collaborators a run needs. State is read for level-0 fingerprints and prior blob

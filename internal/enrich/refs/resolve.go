@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // referenceTier places reference payloads first in the composed document. Composition orders

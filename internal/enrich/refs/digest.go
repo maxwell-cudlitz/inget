@@ -13,7 +13,7 @@ import (
 	"encoding/hex"
 	"sort"
 
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // indexStored groups persisted edges by reference name and reports the shallowest staleness

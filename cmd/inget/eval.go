@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/maxwellcudlitz/inget/internal/cli"
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/eval"
+	"github.com/maxwell-cudlitz/inget/internal/cli"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/eval"
 )
 
 // evalOptions are the command's flags. The three embedder overrides exist together because a

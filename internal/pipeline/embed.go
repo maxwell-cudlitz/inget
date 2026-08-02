@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/destination"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/destination"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // embedViews embeds every pending view in one call and pairs each vector with the guard

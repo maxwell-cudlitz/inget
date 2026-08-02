@@ -56,7 +56,7 @@ spec:
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: fetch
-              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              image: ghcr.io/maxwell-cudlitz/inget:v0.1.0
               imagePullPolicy: IfNotPresent
               command: ["/usr/local/bin/inget-fetch"]
               args: ["--source", "github", "--datatype", "github/repo"]
@@ -116,7 +116,7 @@ spec:
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: run
-              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              image: ghcr.io/maxwell-cudlitz/inget:v0.1.0
               imagePullPolicy: IfNotPresent
               command: ["/usr/local/bin/inget"]
               args: ["run", "github/repo"]
@@ -175,7 +175,7 @@ spec:
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: gc
-              image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+              image: ghcr.io/maxwell-cudlitz/inget:v0.1.0
               imagePullPolicy: IfNotPresent
               command: ["/usr/local/bin/inget"]
               # Start with --dry-run in a new deployment and read the counts for a cycle or two

@@ -1,3 +1,9 @@
+// Tests for the embedder client against an httptest server.
+//
+// Covered here: the happy path, batching to batch_size, MRL truncation followed by
+// re-normalization so a truncated vector is still unit length, a malformed response, an
+// empty input list, and signature stability. Placement by reported index has its own file
+// (embedder_mapping_test.go), as does the dedupe behaviour (dedupe_test.go).
 package model
 
 import (

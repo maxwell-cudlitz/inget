@@ -1,3 +1,9 @@
+// Tests for the cache keys of levels 1 to 3.
+//
+// The property that matters here is that the three levels cannot collide: a fragment
+// derivation, a view generation and an embedding are keyed by different digests even when
+// they are computed over the same text, so a hit at one level can never be served for
+// another. Each key's stability and its reaction to every input is asserted separately.
 package delta
 
 import (

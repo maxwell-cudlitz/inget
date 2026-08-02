@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 )
 
 // collectRuns is phase 1: delete run directories older than the retention window, except the

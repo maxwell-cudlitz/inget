@@ -9,7 +9,7 @@ package github
 import (
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 func TestKeepPath(t *testing.T) {

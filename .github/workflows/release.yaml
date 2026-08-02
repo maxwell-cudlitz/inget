@@ -1,0 +1,80 @@
+# Release on tag: test, then build and publish binaries, the image and the Homebrew cask.
+#
+# The test job repeats what ci.yaml already ran on main, because a tag can be pushed at any
+# commit and a release is the one build nobody can take back. It needs no credentials: the
+# suites that need PostgreSQL or a live model are gated on their own variables and stay
+# skipped, exactly as in CI.
+#
+# Secrets and permissions:
+#   GITHUB_TOKEN       contents:write for the release, packages:write for ghcr.io.
+#   HOMEBREW_TAP_TOKEN a PAT with contents:write on maxwell-cudlitz/homebrew-tap. A workflow
+#                      token is scoped to this repository, so it cannot push the cask. If the
+#                      secret is absent the release fails at the cask step, after the
+#                      binaries and the image are already published — rerun with the secret
+#                      set rather than re-tagging.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Two tags pushed together would race for the same release assets and the same tap commit.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  release:
+    name: goreleaser
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # goreleaser derives the version and the changelog from tags, so a shallow clone
+          # reports the wrong version or none at all.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # No QEMU: the Dockerfile only copies pre-built binaries, so nothing is executed for
+      # the target platform and a cross-platform build needs no emulation. Adding a RUN
+      # instruction to it would change that.
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          # Pinned, like golangci-lint in the Makefile: a release pipeline that changes
+          # under you is not a release pipeline.
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/maxwellcudlitz/inget/internal/ratelimit"
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/ratelimit"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // Driver is the sources[].driver value this connector answers to, and Datatype is the only

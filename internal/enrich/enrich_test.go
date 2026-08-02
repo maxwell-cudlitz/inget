@@ -1,3 +1,9 @@
+// Tests for the enrichers and prompt loading.
+//
+// Both enrichers are covered — passthrough returning its input untouched, llm calling the
+// generator — along with the property that a prompt byte change moves the enricher
+// signature, which is what makes a prompt edit regenerate the views it affects. Output
+// validation is here too: an empty generation is an error, not an empty view.
 package enrich
 
 import (
@@ -6,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 func TestPassthroughReturnsInputUnchanged(t *testing.T) {

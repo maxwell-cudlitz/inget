@@ -20,7 +20,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // skipPatterns drop paths that cost tokens and carry no signal about what a repository does.

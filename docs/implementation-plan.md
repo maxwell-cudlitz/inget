@@ -20,7 +20,7 @@ credentials.
 **Goal.** A buildable, testable, lintable repository with the conventional layout.
 
 **Actions.**
-- `go mod init github.com/maxwellcudlitz/inget`.
+- `go mod init github.com/maxwell-cudlitz/inget`.
 - Create `cmd/inget/`, `cmd/inget-fetch/`, `internal/`, `migrations/`, `prompts/`,
   `deploy/`, `docs/`.
 - `Makefile` with `build test lint run clean fmt tidy`; build to `bin/`.

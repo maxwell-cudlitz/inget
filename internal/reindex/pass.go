@@ -9,9 +9,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/pipeline"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/pipeline"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // rebind moves every named destination onto the configured embedder, recording which bindings

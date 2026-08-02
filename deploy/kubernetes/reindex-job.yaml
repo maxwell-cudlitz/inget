@@ -46,7 +46,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: reindex
-          image: ghcr.io/maxwellcudlitz/inget:v0.1.0
+          image: ghcr.io/maxwell-cudlitz/inget:v0.1.0
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/inget"]
           # No datatype argument: every configured datatype sharing the destination has to move to

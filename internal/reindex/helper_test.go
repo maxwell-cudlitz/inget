@@ -14,9 +14,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/destination"
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/destination"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 const (

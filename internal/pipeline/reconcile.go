@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/enrich/refs"
 )
 
 // reconcileResult holds the computed delta from artifact scanning.

@@ -1,3 +1,9 @@
+// Tests for glob scoping of view dependencies (D3).
+//
+// Wrong matching means wrong invalidation in both directions — a view that never
+// regenerates, or every view regenerating on any change — so these assert `**`,
+// single-segment and multi-segment patterns directly, and assert that ViewSkippable reads
+// the changed set rather than the surviving fragment set.
 package delta
 
 import (

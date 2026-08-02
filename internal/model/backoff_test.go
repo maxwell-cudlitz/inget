@@ -1,3 +1,8 @@
+// Tests for Retry-After parsing and backoff computation.
+//
+// Retry-After arrives as either a delay in seconds or an HTTP date, and a provider may
+// name a delay longer than any run should wait, so parsing and bounding are asserted
+// separately from the retry loop that consumes them.
 package model
 
 import (

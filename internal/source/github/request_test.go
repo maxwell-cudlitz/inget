@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // A secondary rate limit is recoverable: the limiter records how long to wait and the request is

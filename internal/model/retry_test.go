@@ -1,3 +1,9 @@
+// Tests for the retry transport.
+//
+// What is asserted is which failures are retried and which are not: 429 and 5xx retry,
+// other 4xx fail immediately, exhaustion reports the last error, an out-of-bounds
+// Retry-After is capped, and a cancelled context ends the wait instead of sleeping through
+// it.
 package model
 
 import (

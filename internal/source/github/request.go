@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/ratelimit"
+	"github.com/maxwell-cudlitz/inget/internal/ratelimit"
 )
 
 // errNotFound reports a 404. Callers branch on it: a repository named in config that no

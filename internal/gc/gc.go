@@ -22,7 +22,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 )
 
 // State is the slice of state.Store this package needs, declared by the consumer so a test can

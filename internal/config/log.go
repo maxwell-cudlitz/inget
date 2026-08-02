@@ -11,7 +11,7 @@
 package config
 
 import (
-	"github.com/maxwellcudlitz/inget/internal/logging"
+	"github.com/maxwell-cudlitz/inget/internal/logging"
 )
 
 // LoadLog returns the logger options from path's log block, layered and env-overridden

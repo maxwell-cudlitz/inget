@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 // LLMEnricher enriches text by rendering a prompt template and calling a Generator.

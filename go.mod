@@ -1,4 +1,4 @@
-module github.com/maxwellcudlitz/inget
+module github.com/maxwell-cudlitz/inget
 
 go 1.26.5
 

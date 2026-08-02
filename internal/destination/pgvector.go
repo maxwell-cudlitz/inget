@@ -22,7 +22,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 
-	"github.com/maxwellcudlitz/inget/migrations"
+	"github.com/maxwell-cudlitz/inget/migrations"
 )
 
 // registryTable holds one row per destination table, keyed by table name (D7). It is shared

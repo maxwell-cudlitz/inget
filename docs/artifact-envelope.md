@@ -80,10 +80,10 @@ which means a repository where one file changed uploads exactly one blob.
     "blobs_written": 1841,
     "blobs_reused": 192481
   },
-  "tombstones": ["maxwellcudlitz/retired-repo"],
+  "tombstones": ["maxwell-cudlitz/retired-repo"],
   "truncated": false,
   "warnings": [
-    "maxwellcudlitz/monorepo: fragment count 4211 exceeded max_fragments_per_item=2000"
+    "maxwell-cudlitz/monorepo: fragment count 4211 exceeded max_fragments_per_item=2000"
   ]
 }
 ```
@@ -140,16 +140,16 @@ See https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance.
 {
   "schema_version": 1,
   "datatype": "github/repo",
-  "item_id": "maxwellcudlitz/inget",
+  "item_id": "maxwell-cudlitz/inget",
   "fingerprint": "2026-07-31T18:04:11Z",
   "fetched_at": "2026-07-31T20:39:52Z",
   "metadata": {
     "name": "inget",
-    "full_name": "maxwellcudlitz/inget",
+    "full_name": "maxwell-cudlitz/inget",
     "description": "Generic ingestion, enrichment, and embedding pipeline",
     "language": "Go",
     "topics": "rag,embeddings,golang",
-    "url": "https://github.com/maxwellcudlitz/inget",
+    "url": "https://github.com/maxwell-cudlitz/inget",
     "default_branch": "main",
     "updated_at": "2026-07-31T18:04:11Z",
     "visibility": "public"

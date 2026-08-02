@@ -13,9 +13,9 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/reindex"
+	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/reindex"
 )
 
 // checkViews rejects a --view name the datatype does not declare, which is otherwise a silent

@@ -17,10 +17,10 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/destination"
-	"github.com/maxwellcudlitz/inget/internal/pipeline"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/destination"
+	"github.com/maxwell-cudlitz/inget/internal/pipeline"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // pending is one item's work: the metadata every row of it carries, and the views that need a

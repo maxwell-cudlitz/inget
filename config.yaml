@@ -93,7 +93,7 @@ sources:
       token_env: INGET_GITHUB_TOKEN
       api_url: "https://api.github.com"
     domain:
-      orgs: ["maxwellcudlitz"]
+      orgs: ["maxwell-cudlitz"]
       repos: []
       topics: []
       visibility: all                  # all | public | private

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/enrich"
-	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
-	"github.com/maxwellcudlitz/inget/internal/model"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/enrich"
+	"github.com/maxwell-cudlitz/inget/internal/enrich/refs"
+	"github.com/maxwell-cudlitz/inget/internal/model"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // replaceViewPrompt swaps one view's prompt template, which is what editing a .tmpl file does

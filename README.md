@@ -13,24 +13,46 @@ index you can search in plain language, without re-paying for work that has not 
 Because the two are separate, a fetch failure never wastes model spend, and you can
 iterate on prompts against artifacts you already have — no re-fetching, no rate limits.
 
-> **Status: under construction.** Steps 1–7 of 14 in `docs/implementation-plan.md` are
-> complete: the binaries build, report their version and load a validated layered
-> configuration; the artifact envelope — content-addressed blob store, JSONL record shards,
-> manifests, the `_COMMIT` protocol — round-trips; the state store persists every level of
-> the invalidation cascade on PostgreSQL or SQLite; the cascade engine and the model clients
-> are implemented; and the pgvector destination stores, filters and searches view vectors.
-> No command fetches or enriches yet — the connectors and the pipeline are steps 8–10.
+> **Status.** Steps 1–9 and 11–14 of `docs/implementation-plan.md` are complete: both
+> binaries build and release, configuration is layered and validated, artifacts round-trip
+> through a content-addressed blob store, the invalidation cascade skips at four levels, the
+> GitHub connector fetches, the pipeline enriches and embeds, references resolve across
+> records, `inget eval` gates quality, and `reindex`, `state gc` and `query` cover
+> operations. Step 10, the Monday connector, is not implemented — `github/repo` is the only
+> datatype you can fetch today, and the `monday/item` prompts and configuration shipped here
+> are ahead of the code.
 
 ## Install
 
-Requires Go 1.26+.
+Homebrew, on macOS:
 
 ```bash
-git clone https://github.com/maxwellcudlitz/inget
+brew install maxwell-cudlitz/tap/inget
+inget version
+```
+
+Docker, for either binary:
+
+```bash
+docker run --rm ghcr.io/maxwell-cudlitz/inget:latest version
+docker run --rm -v "$PWD/config.yaml:/etc/inget/config.yaml:ro" \
+  ghcr.io/maxwell-cudlitz/inget:latest plan
+```
+
+Or take a `tar.gz` from [releases](https://github.com/maxwell-cudlitz/inget/releases): it
+carries both binaries plus `config.yaml` and `prompts/`. From source, with Go 1.26+:
+
+```bash
+git clone https://github.com/maxwell-cudlitz/inget
 cd inget
 make build       # -> bin/inget, bin/inget-fetch
 ./bin/inget version
 ```
+
+One thing to know before the first run: prompt templates are read from disk, not embedded.
+`config.yaml` names them by relative path, so run from a directory that has `prompts/` beside
+the config, or make those paths absolute. The published image carries `prompts/` and resolves
+them from its own working directory; a Homebrew install carries the binaries only.
 
 ## Usage
 
@@ -101,12 +123,6 @@ as JSON on stdout. Three things it does that are worth knowing:
 domain, so it is recorded as partial and issues no tombstones: an item it never looked at
 is not an item that was deleted. Only a complete, untruncated run can conclude that
 something was removed at the source.
-
-`migrate` is idempotent and needs the DSN variables config names. What comes next:
-
-```bash
-inget query "which repos handle terraform"
-```
 
 ### Quality
 
@@ -374,6 +390,27 @@ harness's live case needs a reachable embedder and skips unless `INGET_TEST_EMBE
 names one; it is the only test that measures a real embedding space rather than a synthetic
 one, and it needs no database and no credentials.
 
+### Releasing
+
+A release is a tag. `.github/workflows/release.yaml` runs the suite, then goreleaser builds
+static binaries for linux and darwin on amd64 and arm64, publishes the archives and
+`checksums.txt`, pushes one multi-arch image to `ghcr.io/maxwell-cudlitz/inget`, and updates
+the Homebrew cask in `maxwell-cudlitz/homebrew-tap`.
+
+```bash
+make release-install    # install the pinned goreleaser (v2.17.1)
+make release-check      # validate .goreleaser.yaml
+make release-snapshot   # build every artifact into dist/, publish nothing
+git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
+```
+
+Nothing is built inside the Dockerfile — goreleaser has already cross-compiled, so the image
+copies the same binaries the archives contain. Two things the pipeline needs that the
+repository cannot provide: a `HOMEBREW_TAP_TOKEN` secret with write access to the tap, since a
+workflow token cannot reach another repository, and an existing tap repository for the cask to
+land in. Prereleases (`v0.1.0-rc.1`) publish binaries and the image but deliberately do not
+move `latest` or the cask.
+
 ## Security notes
 
 - File content matching the gitleaks ruleset is excluded from artifacts, and the exclusion
@@ -388,6 +425,10 @@ one, and it needs no database and no credentials.
 - Neither binary listens on a socket, so there is no server and no authentication surface.
   A webhook receiver would introduce one; `--event-file` deliberately reads a payload from
   disk instead.
+- Released binaries are not code-signed or notarized, so the Homebrew cask clears the macOS
+  quarantine attribute on them at install time. That bypasses Gatekeeper's verification, which
+  is a real trade: verify `checksums.txt` against the release if you want assurance the archive
+  is the one that was published.
 
 ## License
 

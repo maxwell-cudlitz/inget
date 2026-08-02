@@ -11,8 +11,8 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/enrich/refs"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/enrich/refs"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 func TestChangedReferentInvalidatesOnlyTheDependentViews(t *testing.T) {

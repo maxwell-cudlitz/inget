@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/source"
 )
 
 // orgDomain is the smallest domain that enumerates one organisation.

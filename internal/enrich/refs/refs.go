@@ -26,7 +26,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // Resolver kinds, matching the datatypes[].references[].resolver vocabulary in config.

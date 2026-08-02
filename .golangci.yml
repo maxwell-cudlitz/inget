@@ -34,7 +34,7 @@ linters:
       # anything, so an entrypoint assembling them is exempt. Errors from outside the module
       # are still checked everywhere.
       ignore-package-globs:
-        - github.com/maxwellcudlitz/inget/internal/*
+        - github.com/maxwell-cudlitz/inget/internal/*
   exclusions:
     generated: lax
     rules:

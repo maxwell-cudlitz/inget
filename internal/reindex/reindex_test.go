@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/pipeline"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/pipeline"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 func TestRunRewritesEveryStoredViewUnderTheNewEmbedder(t *testing.T) {

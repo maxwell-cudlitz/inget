@@ -5,7 +5,7 @@
 // while every command derives them the same way rather than repeating the mapping.
 package artifact
 
-import "github.com/maxwellcudlitz/inget/internal/config"
+import "github.com/maxwell-cudlitz/inget/internal/config"
 
 // FromConfig converts the artifacts block into store options. Validation of the values
 // themselves already happened in internal/config; Options.normalize repeats the defaulting

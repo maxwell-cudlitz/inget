@@ -1,3 +1,9 @@
+// Tests for fragment reconciliation.
+//
+// Reconcile decides what a run does at all, so every permutation of added, modified,
+// unchanged and deleted is covered in one table, including the empty-cache and
+// empty-incoming edges. What each bucket must contain is the whole contract; how the
+// changed set is then used against view globs is asserted in scope_test.go.
 package delta
 
 import (

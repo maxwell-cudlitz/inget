@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // minimalConfig is a valid configuration with one source and one datatype reading it.

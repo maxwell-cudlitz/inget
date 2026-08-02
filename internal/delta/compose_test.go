@@ -1,3 +1,9 @@
+// Tests for the deterministic composer.
+//
+// The composed document's bytes are part of every level-2 cache key, so ordering, the
+// separator, the header and truncation are all behaviour rather than formatting: a change
+// to any of them regenerates every view of every datatype. These tests pin them, and pin
+// that identical entries in different input orders compose identically.
 package delta
 
 import (

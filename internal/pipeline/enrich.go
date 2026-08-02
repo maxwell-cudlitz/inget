@@ -18,10 +18,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/delta"
-	"github.com/maxwellcudlitz/inget/internal/enrich"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/enrich"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // enrichFragments returns the content each fragment contributes to composition, keyed by

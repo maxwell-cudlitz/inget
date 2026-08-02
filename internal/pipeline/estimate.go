@@ -14,8 +14,8 @@ import (
 	"log/slog"
 	"sort"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/delta"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/delta"
 )
 
 // charsPerToken converts characters to tokens for estimation. Four is the usual ratio for

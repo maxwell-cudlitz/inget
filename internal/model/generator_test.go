@@ -1,3 +1,9 @@
+// Tests for the generator client against an httptest server.
+//
+// Alongside the happy path these pin the things a reproducible generation depends on:
+// temperature and seed are sent even when zero, an over-long prompt is refused rather than
+// silently truncated, a response with no choices is an error, and nested usage details are
+// decoded so cached-token accounting is not silently zero.
 package model
 
 import (

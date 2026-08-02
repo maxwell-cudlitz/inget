@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/ratelimit"
+	"github.com/maxwell-cudlitz/inget/internal/ratelimit"
 )
 
 // Defaults and bounds for the client. The API version is pinned so that a breaking change

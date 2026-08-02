@@ -55,6 +55,9 @@ internal/pipeline/    orchestration, worker pool, checkpointing, signals [implem
 migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
 deploy/               docker-compose [implemented], kubernetes/ CronJobs + reindex Job [implemented]
+.goreleaser.yaml      release pipeline: archives, one multi-arch image, one Homebrew cask
+Dockerfile            runtime image; copies goreleaser's binaries, builds nothing
+.github/workflows/    ci.yaml on push and PR, release.yaml on tags
 ```
 
 `internal/cli` is an addition to the layout in the design document: both binaries need
@@ -109,6 +112,10 @@ make test         # go test -race ./...
 make lint         # go vet + golangci-lint (skips with a warning if not installed)
 make lint-install # install the pinned golangci-lint
 make fmt tidy clean
+
+make release-check      # validate .goreleaser.yaml
+make release-snapshot   # build every release artifact into dist/, publish nothing
+make release-install    # install the pinned goreleaser
 ```
 
 `make build test lint` must be green before any step is considered done.
@@ -164,6 +171,38 @@ INGET_MODELS__EMBEDDER__MODEL=other inget reindex github/repo # rebinds and rewr
 and check that every row of the table carries the new model and that `inget_model_registry`
 agrees. Deleting one `views` row before the last pass is how the prune gets exercised: the
 orphan vector should be the one row it deletes.
+
+## Releasing
+
+A release is a tag: `git tag -a vX.Y.Z -m 'vX.Y.Z' && git push origin vX.Y.Z`.
+`.github/workflows/release.yaml` runs vet and the suite, then goreleaser publishes
+
+- one `tar.gz` per platform (linux and darwin, amd64 and arm64) carrying both binaries,
+  `config.yaml` and `prompts/`, plus `checksums.txt`;
+- one multi-arch image, `ghcr.io/maxwell-cudlitz/inget`, tagged `vX.Y.Z`, `vX.Y` and — only
+  for a non-prerelease — `latest`;
+- the Homebrew cask in `maxwell-cudlitz/homebrew-tap`.
+
+Validate a change to the pipeline with `make release-check`, and prove it with
+`make release-snapshot`, which needs docker with buildx and writes everything to `dist/`
+without pushing. Snapshot mode cannot build a manifest without pushing, so it produces
+per-architecture tags (`…-amd64`, `…-arm64`) instead of one multi-arch tag; that difference is
+goreleaser's, not this configuration's.
+
+Three preconditions, none of which the repository can satisfy on its own:
+
+- **`HOMEBREW_TAP_TOKEN`** must be a secret holding a PAT with `contents:write` on the tap. A
+  workflow's `GITHUB_TOKEN` is scoped to this repository and cannot push to another. If it is
+  missing the release fails at the cask step, *after* the binaries and image are published —
+  set the secret and re-run the job rather than re-tagging.
+- **The tap repository must exist.** goreleaser commits into it; it does not create it.
+- **`deploy/kubernetes/` pins an image tag** (`v0.1.0`). Manifests and releases are versioned
+  separately, so a tag bump has to reach them or a CronJob pulls something that is not there.
+
+The module path, the GitHub owner and the image namespace all read `maxwell-cudlitz`, and they
+are three independent strings that have to move together: the module path lives in `go.mod`,
+every import, the `-X` flags in the Makefile and `.goreleaser.yaml`, and the wrapcheck glob in
+`.golangci.yml`; the owner keys the image, the tap and the clone URLs in the documentation.
 
 ## Extension points
 
@@ -255,6 +294,28 @@ require touching the pipeline.
   live credentials into memory that log lines and warnings could reach. Rule IDs are what
   gets recorded; content that matched is excluded from the artifact but keeps its
   fingerprint, so its next change is still detectable.
+
+- **Prompt templates are read from disk, and that is what shapes the release artifacts
+  (`internal/enrich/prompt.go`).** Migrations are embedded; prompts are not, because a prompt is
+  meant to be edited and its bytes feed the enricher signature. Three consequences: the archives
+  ship `prompts/` and `config.yaml`, the image copies `prompts/` and sets `WORKDIR /opt/inget` so
+  the relative paths in a mounted config resolve, and a Homebrew install — a cask installs
+  binaries only — has neither, which is what the cask's caveats say. Embedding them with
+  `go:embed` would close that gap and would also make the shipped bytes unmodifiable, so it is a
+  design decision, not a packaging fix.
+- **Nothing is compiled inside the Dockerfile (`Dockerfile`, `.goreleaser.yaml`).** goreleaser
+  cross-compiles first and hands the build a context holding only the binaries plus whatever
+  `extra_files` lists, so the image carries the same bytes as the archives. Adding a builder
+  stage would produce a second, differently-built binary under the same version. It also has no
+  `RUN` instruction, which is why the release workflow needs no QEMU: nothing executes for the
+  target platform. Add one and multi-arch builds start needing emulation.
+- **The base image is pinned by index digest, not by tag.** `nonroot` moves. Refresh it with
+  `docker buildx imagetools inspect gcr.io/distroless/static-debian13:nonroot` and take the
+  top-level `Digest`, not a per-platform one, or the multi-arch build loses an architecture.
+- **Released binaries are unsigned, and the cask works around it.** The post-install hook clears
+  `com.apple.quarantine`, without which macOS reports "inget is damaged and cannot be opened".
+  That bypasses Gatekeeper; the honest fix is an Apple Developer certificate and notarization,
+  which costs money the project does not spend. Do not remove the hook without adding signing.
 
 - **Signature completeness (D2).** Any input that changes generated output must be a
   struct field feeding the signature hash. A forgotten contributor means silently stale

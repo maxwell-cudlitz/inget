@@ -2,7 +2,7 @@
 # time. Every target is safe to run offline except `tidy`.
 
 BIN_DIR   := bin
-MODULE    := github.com/maxwellcudlitz/inget
+MODULE    := github.com/maxwell-cudlitz/inget
 STAMP_PKG := $(MODULE)/internal/cli
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -15,8 +15,10 @@ LDFLAGS := -s -w \
 	-X $(STAMP_PKG).Date=$(DATE)
 
 GOLANGCI_VERSION := v2.12.2
+GORELEASER_VERSION := v2.17.1
 
-.PHONY: all build test cover lint lint-install fmt tidy run clean
+.PHONY: all build test cover lint lint-install fmt tidy run clean \
+	release-check release-snapshot release-install
 
 all: build test lint
 
@@ -59,4 +61,17 @@ run: build
 
 ## clean: remove build output
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) dist
+
+## release-check: validate .goreleaser.yaml without building anything
+release-check:
+	goreleaser check
+
+## release-snapshot: build every release artifact locally, publishing nothing.
+## Needs docker with buildx, since it also builds the image.
+release-snapshot:
+	goreleaser release --snapshot --clean
+
+## release-install: install the pinned goreleaser into GOPATH/bin
+release-install:
+	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)

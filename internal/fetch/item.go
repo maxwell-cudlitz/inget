@@ -18,9 +18,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
-	"github.com/maxwellcudlitz/inget/internal/source"
-	"github.com/maxwellcudlitz/inget/internal/state"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/source"
+	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
 // fetchItem fetches one item and writes its record.

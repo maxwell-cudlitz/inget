@@ -1,6 +1,9 @@
 # Build output
 bin/
 
+# goreleaser output: archives, checksums, and the rendered cask
+dist/
+
 # Local artifact store and any other local run state
 .inget/
 

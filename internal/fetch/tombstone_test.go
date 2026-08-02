@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/maxwellcudlitz/inget/internal/artifact"
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 )
 
 func TestFullRunTombstonesItemsTheSourceNoLongerHas(t *testing.T) {

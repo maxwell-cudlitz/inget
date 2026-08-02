@@ -16,7 +16,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/maxwellcudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/config"
 )
 
 // Options configures a connector. It mirrors one entry of the sources block, plus the one
