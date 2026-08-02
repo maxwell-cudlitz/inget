@@ -118,7 +118,6 @@ func newCascadeHarness(t *testing.T) *cascadeHarness {
 				Views:            views,
 				ComposeOrder:     "tier",
 				ComposeMaxChars:  120000,
-				DriftThreshold:   0.02,
 				FragmentEnricher: true,
 			},
 		},

@@ -1126,3 +1126,122 @@ passing it along.
   imprecise wording, left alone rather than changed mid-step).
 - **Tombstoning an item leaves its outgoing edges.** They are filtered out of the work set by
   the artifact-run check above; `state gc` should delete them.
+
+## Drift deletion and finish_reason guard (2026-08-02)
+
+Two changes in one session: the fuzzy drift threshold mechanism is deleted, and a
+finish_reason/empty-content guard is added to the generator client.
+
+### Task A: drift threshold deletion
+
+The Step 5–6 review repaired drift so that it actually functioned — normalising by runes
+instead of bytes, measuring from the embedded text instead of the last text — and it is now
+deleted because it guarded a free local operation. The irony is explicit.
+
+**Rationale.** View generation is already gated by the level-2 scoped input hash (stage 7),
+which protects the only paid operation. Drift gated stage 9 (embedding, a local TEI server on
+Metal) and stage 10 (a local pgvector upsert) — both free. Measured on 2026-08-02, DeepSeek V4
+Flash is not reproducible at temperature 0 with a fixed seed: two byte-identical requests
+returned 487 and 298 characters, so a 0.02 lexical threshold is exceeded on essentially every
+regeneration and never suppresses anything. A semantic replacement would need the new vector
+computed before it could threshold on it, so it could only skip the upsert; it would
+additionally need the previous vector, which state does not store. The mechanism is therefore
+deleted rather than replaced.
+
+**Invariants preserved:**
+1. Generation does not happen when the composed input is unchanged (level-2 input hash, stage 7).
+2. Embedding does not happen when the view text is byte-identical to the text behind the stored
+   vector (`EmbeddedHash` comparison in `reuseVector`).
+
+**Files deleted:** `internal/delta/drift.go`, `internal/delta/drift_test.go`.
+
+**Files changed:** `internal/delta/delta.go`, `internal/pipeline/views.go`,
+`internal/pipeline/pipeline.go`, `internal/pipeline/process.go`,
+`internal/pipeline/helper_test.go`, `internal/pipeline/views_test.go`,
+`internal/config/schema.go`, `internal/config/lookup.go`, `internal/config/load.go`,
+`internal/config/validate_lists.go`, `internal/config/load_test.go`,
+`internal/config/validate_test.go`, `internal/config/hash_test.go`,
+`internal/config/testdata/minimal.yaml`, `internal/config/testdata/reordered.yaml`,
+`cmd/inget/deps.go`, `internal/state/types.go`, `internal/enrich/enricher.go`,
+`config.yaml`, `go.mod`, `go.sum`.
+
+**Dependency removed:** `github.com/agnivade/levenshtein` v1.2.1.
+
+### Task B: finish_reason and empty-content guard
+
+Measured against the live Moonshot API: kimi-k3 returned HTTP 200 with `finish_reason`
+`"length"` and empty content when `max_tokens` was too small. Without this guard, a truncated
+or empty completion is returned as valid, cached at level 2, embedded, and upserted as a
+legitimate view.
+
+**Files changed:** `internal/model/wire.go` (added `FinishReason` to `chatChoice`),
+`internal/model/generator.go` (guard after zero-choices check),
+`internal/model/generator_test.go` (four table-driven httptest cases).
+
+### Verified
+
+`make build`, `make test` (`go test -race ./...`), `go vet ./...`, `gofmt -l .` (empty),
+`golangci-lint run` (0 issues), `go mod tidy` (no-op) — all green.
+
+### Correction to the record above
+
+The guard tests landed in `internal/model/generator_test.go`, pushing it to 317 lines, over
+the 250-line budget. They were moved to `internal/model/guard_test.go` (105 lines), leaving
+`generator_test.go` at 226, and the test was renamed
+`TestGeneratorRejectsTruncatedOrEmptyCompletions`. A stale "drift threshold" phrase in D10's
+Kimi paragraph was also removed. Re-verified: `gofmt`, `go vet`, `make build`,
+`go test -race -count=1 ./...`, `golangci-lint run` (0 issues), `go mod tidy` (no-op), and
+`levenshtein` absent from both `go.mod` and `go.sum`.
+
+## Live provider verification, 2026-08-02
+
+The first real model calls this project has made. Everything before this ran against fakes or
+`httptest`, so the notes below are measurements, not assumptions.
+
+**Embedder — working.** `Qwen/Qwen3-Embedding-0.6B` under Homebrew TEI 1.9.3 on Metal, at
+`127.0.0.1:8090`. `/v1/embeddings` returns 1024 dims at L2 norm 1.000000, one object per input
+with distinct `index` values, and echoes the model string — satisfying every field
+`embedder.go` depends on, with `fit()` needing no truncation because native width already
+equals `dimensions: 1024`. Cosine between two unrelated sentences was 0.2995. Warmup takes
+about three minutes.
+
+TEI's CPU Docker images are per-architecture and not multi-arch (`cpu-1.9` is x86_64,
+`cpu-arm64-1.9` is aarch64), and a container has no Metal or MPS access on any host, so
+`deploy/docker-compose.yaml` now takes `TEI_IMAGE_TAG` and `TEI_HOST_PORT` and documents the
+Homebrew route as preferred on Apple Silicon. Port 8090 rather than 8080 because a gluetun
+container holds 8080 on this machine.
+
+**Generator — DeepSeek V4 Flash, working.** `temperature: 0`, `seed` and
+`max_output_tokens: 1024` are all accepted; a two-sentence answer finished with
+`finish_reason: stop` at 73–109 completion tokens, of which 25 were reasoning tokens.
+`prompt_cache_hit_tokens` was 0 even on an identical repeat, attributed to the prompt being
+below DeepSeek's caching minimum — `plan`'s cache-hit estimates remain unverified against a
+real composed document.
+
+**Generation is not reproducible.** Two byte-identical requests at `temperature: 0` with
+`seed: 1` returned 487 and 298 characters of different wording. This is a provider property,
+not a client bug. It is what motivated deleting the drift threshold, and it forced the D14
+change below.
+
+**Kimi K3 — rejected as default.** Refuses every temperature but 1, and `wire.go` sends
+`temperature` unconditionally, so the configured 0 makes every call a hard 400. It also spends
+its output budget on reasoning before emitting content: 509 reasoning tokens and empty content
+with `finish_reason: length` at `max_tokens` 512, needing 2048 to finish. Recorded in D10.
+
+### D14 changed: eval embeds stored view text and never generates
+
+Agreed this session and recorded in D10, D14 and the Step 12 plan. `inget eval` reads
+`state.views.text` and re-embeds it rather than regenerating views, because generator
+non-determinism would otherwise fold into every metric and confound the `--embedder`
+comparison the same decision relies on. Consequences for whoever implements Step 12: no
+generator credentials are needed, a corpus with stored view text is a hard prerequisite
+(`inget-fetch` then `inget run`), and an empty sample must be reported as empty rather than
+scored as a pass.
+
+### Step 12 is not started
+
+No `eval` command exists in the CLI or anywhere in the Go sources. None of its four
+deliverables — sampling, the five metrics, per-datatype reporting with a non-zero exit, the
+`--embedder` override, threshold config — are implemented. This session did prerequisites and
+corrective work only. `.inget/` was cleaned at some point, so the corpus needs re-fetching,
+and `INGET_STATE_DSN` and `INGET_PGVECTOR_DSN` are not yet exported.

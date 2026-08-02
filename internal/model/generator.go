@@ -93,6 +93,18 @@ func (g *openAIGenerator) Generate(ctx context.Context, prompt string) (string, 
 		return "", Usage{}, fmt.Errorf("model: %s returned no choices", url)
 	}
 
+	choice := resp.Choices[0]
+	if choice.FinishReason == "length" {
+		return "", Usage{}, fmt.Errorf(
+			"model: %s returned finish_reason \"length\": the output was truncated; "+
+				"raise models.generator.max_output_tokens", url)
+	}
+	if strings.TrimSpace(choice.Message.Content) == "" {
+		return "", Usage{}, fmt.Errorf(
+			"model: %s returned empty content: the model produced no text; "+
+				"raise models.generator.max_output_tokens or check the prompt", url)
+	}
+
 	usage := Usage{
 		PromptTokens:     resp.Usage.PromptTokens,
 		CompletionTokens: resp.Usage.CompletionTokens,
@@ -105,7 +117,7 @@ func (g *openAIGenerator) Generate(ctx context.Context, prompt string) (string, 
 		"completion_tokens", usage.CompletionTokens,
 		"cache_hit_tokens", usage.CacheHitTokens)
 
-	return resp.Choices[0].Message.Content, usage, nil
+	return choice.Message.Content, usage, nil
 }
 
 // Signature returns a stable identifier covering model, temperature, seed and limits.

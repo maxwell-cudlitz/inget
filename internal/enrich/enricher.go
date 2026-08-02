@@ -60,7 +60,7 @@ type FragmentTemplateData struct {
 //
 // Trimming is part of the contract rather than a courtesy: the level-3 guard hashes this
 // text, so leading whitespace a model added on one call and not the next would otherwise
-// read as drift and pay for a re-embed. maxTokens <= 0 disables the length bound.
+// produce a different hash and pay for a re-embed. maxTokens <= 0 disables the length bound.
 func validateOutput(what, text string, maxTokens int) (string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

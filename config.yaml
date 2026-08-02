@@ -121,7 +121,6 @@ datatypes:
     compose:
       order: tier                      # tier | path
       max_chars: 120000
-    drift_threshold: 0.02
     destinations: [local-pgvector]
     views:
       - name: role
@@ -163,7 +162,6 @@ datatypes:
     enricher: llm
     fragment_enricher:
       enabled: false                   # columns are already short; no per-column LLM
-    drift_threshold: 0.02
     destinations: [local-pgvector]
     references:
       - name: linked_repo

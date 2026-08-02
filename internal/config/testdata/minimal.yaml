@@ -86,7 +86,6 @@ datatypes:
     compose:
       order: tier
       max_chars: 5000
-    drift_threshold: 0.05
     destinations: [vectors]
     views:
       - name: role

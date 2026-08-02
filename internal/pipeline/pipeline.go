@@ -47,7 +47,6 @@ type DatatypeConfig struct {
 	Views            []config.View
 	ComposeOrder     string
 	ComposeMaxChars  int
-	DriftThreshold   float64
 	FragmentEnricher bool
 	MetadataFields   map[string]string
 }

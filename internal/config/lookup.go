@@ -11,15 +11,6 @@ func (e Embedder) EffectiveDims() int {
 	return e.Dimensions
 }
 
-// Drift returns the configured drift threshold, or the documented default when the key
-// is absent. An explicit 0 is honoured and means "re-embed on any textual change".
-func (d Datatype) Drift() float64 {
-	if d.DriftThreshold == nil {
-		return DefaultDriftThreshold
-	}
-	return *d.DriftThreshold
-}
-
 // Source returns the named source, or false when no source declares that name.
 func (c *Config) Source(name string) (*Source, bool) {
 	for i := range c.Sources {

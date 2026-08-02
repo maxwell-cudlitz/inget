@@ -8,7 +8,7 @@
 //  6. Compose, per view, over the fragments and references that view depends on.
 //  7. Generate the views whose scoped input hash or signature moved.
 //  8. Annotate metadata.
-//  9. Embed the views whose text drifted past drift_threshold.
+//  9. Embed the views whose text changed.
 //  10. Upsert to every configured destination.
 //  11. Checkpoint the item: every guard, its reference edges, and the work row, in one
 //     transaction, then tell the items referencing this one that it moved.
@@ -150,8 +150,7 @@ func resolveReferences(ctx context.Context, ex *execution, rec *artifact.Record)
 // It runs only when the item published something — its own content changed, or a view was
 // re-embedded — because an item that resolved to exactly what it held before has nothing to
 // tell its referrers, and stopping there is what keeps a reference cycle from costing a
-// reprocess on every future run. A regeneration that kept its vector for low drift does not
-// count: the text a referrer would pull is still the text behind that vector (D4).
+// reprocess on every future run.
 //
 // A failure to mark is logged rather than returned: the item's own work is committed and
 // correct, and the next change to it will mark again.

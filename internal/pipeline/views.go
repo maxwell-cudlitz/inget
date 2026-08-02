@@ -160,23 +160,19 @@ func scopedCompose(ctx context.Context, cfg DatatypeConfig, view config.View, re
 // reuseVector reports whether a regenerated view can keep the vector it already has, and
 // returns the guard state to record when it can.
 //
-// The comparison is against the text that produced the stored vector, not against the text
-// generated last time. Those differ precisely when an earlier regeneration was skipped for
-// low drift, and comparing against the newer text would let a run of sub-threshold changes
-// walk the view arbitrarily far from what is indexed while every individual step looked
-// acceptable (D4).
+// Reuse requires three conditions: a stored vector exists (EmbeddedHash != ""), the
+// embedder model and signature match, and the new text is byte-identical to the text the
+// stored vector was produced from. A changed embedder model or signature always forces a
+// re-embed.
 func reuseVector(ex *execution, p pendingView) (state.ViewState, bool) {
 	emb := ex.deps.Embedder
 	prev := p.existing
 	if prev.EmbeddedHash == "" || prev.Model != emb.Model() || prev.Signature != emb.Signature() {
 		return state.ViewState{}, false // never embedded, or embedded by a different model
 	}
-	identical := prev.EmbeddedHash == delta.EmbeddingHash(p.text)
-	if !identical && delta.DriftExceedsThreshold(prev.Text, p.text, ex.deps.Config.DriftThreshold) {
-		return state.ViewState{}, false
+	if prev.EmbeddedHash != delta.EmbeddingHash(p.text) {
+		return state.ViewState{}, false // text changed; must re-embed
 	}
-	// Text and EmbeddedHash still describe the stored vector, so they are left alone; only
-	// the level-2 guard advances.
 	prev.InputHash = p.inputHash
 	return prev, true
 }

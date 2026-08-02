@@ -3,7 +3,6 @@ module github.com/maxwellcudlitz/inget
 go 1.26.5
 
 require (
-	github.com/agnivade/levenshtein v1.2.1
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/jackc/pgx/v5 v5.10.0

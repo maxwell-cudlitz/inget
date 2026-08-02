@@ -73,7 +73,6 @@ func TestHashesRespondToRelevantChanges(t *testing.T) {
 		{"dependency glob", func(c *Config) { c.Datatypes[0].Views[0].DependsOn = []string{"**"} }, true, false},
 		{"fragment cap", func(c *Config) { c.Artifacts.MaxFragmentsPerItem = 11 }, true, false},
 		{"blob cap", func(c *Config) { c.Artifacts.BlobMaxBytes = 1024 }, true, false},
-		{"drift threshold", func(c *Config) { threshold := 0.9; c.Datatypes[0].DriftThreshold = &threshold }, true, false},
 		// The store location does not change content, so it is excluded by design.
 		{"artifact store url", func(c *Config) { c.Artifacts.URL = "s3://bucket/prefix" }, false, false},
 		{"unrelated model setting", func(c *Config) { c.Models.Generator.Concurrency = 32 }, false, false},

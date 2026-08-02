@@ -102,7 +102,6 @@ func buildDeps(ctx context.Context, cfg *config.Config, dt config.Datatype, dryR
 			Views:            dt.Views,
 			ComposeOrder:     composeOrder(dt),
 			ComposeMaxChars:  composeMaxChars(dt),
-			DriftThreshold:   dt.Drift(),
 			FragmentEnricher: dt.FragmentEnricher.Enabled,
 			MetadataFields:   dt.MetadataFields,
 		},

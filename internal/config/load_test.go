@@ -85,9 +85,6 @@ func TestListElementDefaultsAreFilledIn(t *testing.T) {
 	if item.Compose.Order != DefaultComposeOrder || item.Compose.MaxChars != DefaultComposeMaxChars {
 		t.Errorf("monday/item compose = %+v, want the documented defaults", item.Compose)
 	}
-	if got := item.Drift(); got != 0.02 {
-		t.Errorf("monday/item drift threshold = %v, want 0.02", got)
-	}
 }
 
 func TestPrecedenceBaseLocalEnv(t *testing.T) {
@@ -141,15 +138,11 @@ func TestNestedEnvOverridesAcrossTypes(t *testing.T) {
 func TestListElementEnvOverrideUnsupported(t *testing.T) {
 	base := fixture(t, "minimal.yaml")
 	t.Setenv("INGET_SOURCES__0__NAME", "not-applied")
-	t.Setenv("INGET_DATATYPES__0__DRIFT_THRESHOLD", "0.5")
 
 	cfg := load(t, base)
 
 	if cfg.Sources[0].Name != "git" {
 		t.Errorf("sources[0].name = %q, want git: list elements must not be env-overridable", cfg.Sources[0].Name)
-	}
-	if got := cfg.Datatypes[0].Drift(); got != 0.05 {
-		t.Errorf("datatypes[0].drift_threshold = %v, want 0.05 from the file", got)
 	}
 	// The same block is reachable through the local override layer, which replaces the
 	// whole list rather than merging element by element.

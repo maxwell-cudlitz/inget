@@ -27,7 +27,8 @@ type chatResponse struct {
 }
 
 type chatChoice struct {
-	Message chatMessage `json:"message"`
+	Message      chatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason"`
 }
 
 type chatUsageBlock struct {

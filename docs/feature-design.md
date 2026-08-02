@@ -235,23 +235,26 @@ change that invalidates and rebuilds the view once.
 
 ### D4. LLM non-determinism is handled explicitly, not ignored
 
-**Decision.** Three layers: `temperature: 0` and a fixed `seed` where the provider
-supports it; a **drift threshold** — a regenerated view is only re-embedded when its
-normalized Levenshtein distance from the previously embedded text exceeds
-`drift_threshold` (default `0.02`); and the state table records `embedded_hash`
-separately from the current `text`, so the vector and the text it came from are always
-known to be consistent.
+**Decision.** Two layers: `temperature: 0` and a fixed `seed` where the provider
+supports it; and the state table records `embedded_hash` separately from the current
+`text`, so the vector and the text it came from are always known to be consistent. A
+view is re-embedded only when its text is not byte-identical to the text behind the
+stored vector. An embedder model or signature change forces a re-embed regardless of
+text.
 
 **Rationale.** Level 3 is defeated by generative non-determinism: the same input can
 produce cosmetically different output, forcing a pointless re-embed and destination
-write. Bazel's remote-caching documentation calls this cache poisoning — "a
-non-deterministic action that produces different output bytes for the same key" — and
-treats it as a first-class hazard. D3 is the real fix (do not regenerate at all); the
-drift threshold is the backstop for views that do regenerate.
+write. D3 is the real fix (do not regenerate at all when the composed input is
+unchanged); the `embedded_hash` identity check is the backstop for views that do
+regenerate. Measured on 2026-08-02, DeepSeek V4 Flash is not reproducible at
+temperature 0 with a fixed seed (two byte-identical requests returned 487 and 298
+characters), confirming that non-determinism is real; the identity check is what
+prevents it from causing pointless work.
 
-**Trade-offs.** A view whose text changed only slightly keeps an embedding derived
-from marginally older text. Bounded by the threshold and made auditable by storing
-both hashes.
+**Trade-offs.** Every regeneration that produces even a cosmetically different string
+pays for a re-embed. Since embedding is a local TEI server on Metal, this cost is
+negligible. The level-2 input hash (stage 7) is what protects the only paid operation
+(generation).
 
 **Reference.** https://blogsystem5.substack.com/p/bazel-remote-caching
 
@@ -382,11 +385,35 @@ Verified provider facts as of 2026-07-31:
   `/v1/chat/completions`, `Authorization: Bearer`. $3.00/M input, $0.30/M on cache hit,
   $15.00/M output. Automatic context caching. Limits are per-tier across concurrency,
   RPM, TPM, TPD. **No embeddings endpoint.**
+
+  Two constraints measured against the live API on 2026-08-02 that make it unusable as
+  this pipeline's default. It rejects every temperature but 1 —
+  `invalid temperature: only 1 is allowed for this model` — and `wire.go` sends
+  `temperature` unconditionally, so the configured 0 makes every call a hard 400. It also
+  emits reasoning tokens ahead of content: a one-sentence prompt spent 509 reasoning
+  tokens and returned empty content with `finish_reason: length` at `max_tokens` 512,
+  and needed 2048 to finish, so `max_output_tokens: 1024` is below its floor. Choosing it
+  means giving up the determinism the delta cache assumes.
 - **DeepSeek V4** — `deepseek-v4-pro` ($0.435/M in, $0.87/M out) and
   `deepseek-v4-flash` ($0.14/M in, $0.28/M out), both 1M context, 384K max output.
-  Automatic disk context caching at ~1/10 input price. Concurrency-based limits (500
-  and 2,500 respectively). Legacy `deepseek-chat` / `deepseek-reasoner` aliases were
+  Automatic disk context caching at 1/50 of input price ($0.0028/M cache-hit on flash,
+  $0.003625/M on pro; re-verified 2026-08-02, and the pro list price is $1.74/$3.48 with
+  a promotional discount currently producing the figures above). Concurrency-based limits
+  (500 and 2,500 respectively). Legacy `deepseek-chat` / `deepseek-reasoner` aliases were
   retired 2026-07-24 and must not be used. **No embeddings endpoint.**
+
+  Measured against the live API on 2026-08-02 with `wire.go`'s exact request shape:
+  `temperature: 0` and `seed` are both accepted, and `max_output_tokens: 1024` is
+  comfortable — a two-sentence answer finished with `finish_reason: stop` at 73–109
+  completion tokens, of which only 25 were reasoning tokens, so it does not exhaust its
+  output budget the way kimi-k3 does.
+
+  **But temperature 0 plus a fixed seed is not reproducible.** Two byte-identical requests
+  returned materially different text (487 and 298 characters, different wording). This
+  contradicts the assumption behind `wire.go` sending both fields unconditionally, and it
+  is a property of the provider, not the client — the most likely cause is batch-dependent
+  routing in a mixed-expert model, which no request parameter controls. Consequences for
+  D4 and D14 are recorded there.
 - **Qwen3-Embedding-0.6B** — Apache 2.0, native 1024 dims, MRL
   `[128,256,384,512,768,1024,1536,2048,2560]`, 32K sequence length, MTEB English v2
   70.70, MTEB Code v1 75.41.
@@ -530,6 +557,24 @@ aggregate:
 Adding a datatype adds coverage with no test changes. `--embedder` overrides the
 configured embedder so two models can be A/B compared on the real corpus.
 
+**The harness embeds stored view text; it does not regenerate views.** `inget eval`
+reads `state.views.text` — by definition the text each stored vector was produced
+from — and re-embeds it. It never calls the generator.
+
+This is forced by a provider property measured on 2026-08-02: generation is not
+reproducible. DeepSeek V4 Flash returned materially different text (487 and 298
+characters) for two byte-identical requests at `temperature: 0` with a fixed seed, and
+Kimi K3 refuses `temperature: 0` altogether. Regenerating views per eval run would
+therefore fold that variance into every metric, which defeats a threshold gate — a
+score could cross the line because the wording moved, not because retrieval changed.
+It would also invalidate the `--embedder` comparison the same decision depends on,
+since generator noise would be confounded with the embedder being tested.
+
+The cost is that eval no longer exercises generation. That is the correct division:
+generation is covered by `inget run` and by the generator client's own guards, while
+eval measures the embedding and retrieval behaviour it is named for, over a fixed
+corpus, with the only variable being the embedder under test.
+
 **Rationale.** MTEB deltas of a few points do not reliably transfer to a specific
 domain, and per-datatype reporting matters because the embedder's contribution depends
 on the enricher: with `llm`, the embedder sees clean prose and is not the bottleneck;
@@ -553,7 +598,6 @@ hide that.
 | HTTP retry | `hashicorp/go-retryablehttp` | Transport-level retry for API clients. |
 | SQLite | `modernc.org/sqlite` | Pure Go, no CGO, keeps static cross-compiled binaries. |
 | Glob matching | `bmatcuk/doublestar/v4` | `path.Match` semantics plus `**`, which view dependency globs require (D3). Extending `path.Match` by hand is a known source of subtle mismatches, and wrong glob scoping corrupts the cascade in both directions. |
-| Edit distance | `agnivade/levenshtein` | Drift measurement (D4) needs a correct distance kernel; normalization against the longer string stays in `internal/delta`. A narrow algorithmic domain, so a researched library rather than a hand-rolled DP. |
 | Secret detection | `zricethezav/gitleaks/v8` | Scanning fetched content for committed credentials needs a maintained multi-provider ruleset with entropy checks, not a bespoke pattern list (see Security considerations). Module path retains the original `zricethezav` prefix although the repository moved. |
 | Run identifiers | `oklog/ulid/v2` | Run IDs are ULIDs so that lexical ordering is chronological ordering, which is how readers resolve `latest`. Correct monotonic generation under a shared entropy source is not worth reimplementing. |
 | Logging | stdlib `log/slog` | Structured JSON, no dependency. |
@@ -877,7 +921,6 @@ datatypes:
     compose:
       order: tier                      # tier | path
       max_chars: 120000
-    drift_threshold: 0.02
     destinations: [local-pgvector]
     views:
       - name: role
@@ -916,7 +959,6 @@ datatypes:
     enricher: llm
     fragment_enricher:
       enabled: false                   # columns are already short; no per-column LLM
-    drift_threshold: 0.02
     destinations: [local-pgvector]
     references:
       - name: linked_repo
@@ -1227,7 +1269,7 @@ Per item, in order. Each stage may short-circuit.
 6. **Generate views** whose scoped composed hash or signature differs from
    `views.input_hash`. Others are skipped and reported in `EnrichOutput.Skipped`.
 7. **Annotate metadata**: static and templated fields plus `related_keys`.
-8. **Embed** views whose text drifted beyond `drift_threshold` from `embedded_hash`.
+8. **Embed** views whose text changed from the text behind the stored vector.
 9. **Upsert** to each configured destination in batches; delete vectors for tombstoned
    items and removed fragments.
 10. **Checkpoint** the item in `work` and persist all guard state in one transaction.
@@ -1248,7 +1290,7 @@ references, and the view name.
 | Monday complexity budget exhausted | Reactive limiter reads `RateLimit` header, sleeps `t`; distinct handling per 429 code; honors `Retry-After`. |
 | GitHub secondary rate limit | Backoff with jitter on `retry-after`; concurrency capped by `limits.max_concurrent`. |
 | Prompt or model change silently reuses stale cache | Signature completeness (D2); mismatch invalidates and logs a `WARN` with affected count. |
-| LLM non-determinism causes pointless re-embeds | `temperature: 0`, seed, drift threshold; `embedded_hash` recorded separately (D4). |
+| LLM non-determinism causes pointless re-embeds | `temperature: 0`, seed; non-determinism confirmed (DeepSeek V4 Flash, 2026-08-02); the `embedded_hash` identity check is the backstop (D4). |
 | Embedding model changed under an existing index | `inget_model_registry` rejects the write with instructions to run `reindex` (D7). |
 | Vector width mismatch | Enforced by the `halfvec(1024)` column type and `AssertModel`. |
 | Concurrent runs corrupt state | Postgres advisory lock per datatype; `concurrencyPolicy: Forbid` in the CronJob. |
@@ -1345,7 +1387,7 @@ Go convention of `cmd/` plus `internal/` rather than the generic `src/` layout.
 **Unit tests** (stdlib `testing`, table-driven) cover every branching function:
 delta reconciliation across added/modified/unchanged/deleted permutations; signature
 computation completeness; glob scoping; config precedence including env nesting;
-envelope round-trip; adaptive limiter header parsing; drift-threshold arithmetic;
+envelope round-trip; adaptive limiter header parsing;
 tier classification and noise filtering.
 
 **Fakes, not mocks.** A deterministic `Generator` returning a hash-derived string and

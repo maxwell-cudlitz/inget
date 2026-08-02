@@ -4,7 +4,6 @@
 # element order does.
 datatypes:
   - destinations: [vectors]
-    drift_threshold: 0.05
     views:
       - depends_on: ["**", "cmd/**"]
         prompt: prompts/git/repo/role.tmpl

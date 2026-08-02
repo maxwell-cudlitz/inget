@@ -105,9 +105,6 @@ func (c *Config) validateDatatypes(v *validator) {
 		}
 		v.enum(path+".compose.order", d.Compose.Order, "tier", "path")
 		v.positive(path+".compose.max_chars", int64(d.Compose.MaxChars))
-		if drift := d.Drift(); drift < 0 || drift > 1 {
-			v.failf("%s.drift_threshold = %v, want between 0 and 1", path, drift)
-		}
 		for key := range d.MetadataFields {
 			v.required(path+".metadata_fields key", key)
 		}

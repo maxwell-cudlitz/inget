@@ -116,16 +116,13 @@ reclaimable; `ReferencedBy` returns reverse edges; signature change is detectabl
 - Glob scoping: match fragment keys against a view's `depends_on`, then compute the
   scoped composed hash. Matching is `bmatcuk/doublestar/v4`, not a hand-extended
   `path.Match` (D15).
-- Drift measurement: normalized Levenshtein distance via `agnivade/levenshtein`, with
-  the `drift_threshold` comparison (D4). Normalization against the longer string stays
-  in this package.
 - Deterministic composer: tier then path ordering, `max_chars` truncation.
 
 **Acceptance.** This is the highest-value test surface in the project. Table-driven
 tests cover every delta permutation; identical inputs in different orders produce
 identical composed hashes; changing a prompt byte changes the signature; a view whose
-globs match nothing is reported as skippable; drift below and above threshold behave
-correctly; `**` and single-segment globs match as specified.
+globs match nothing is reported as skippable; `**` and single-segment globs match as
+specified.
 
 ---
 
@@ -279,14 +276,22 @@ is deferred and logged; `related_keys` reaches vector metadata and is GIN-querya
 **Goal.** `inget eval` as the acceptance gate for datatypes and prompts (D14).
 
 **Actions.**
-- Sample N items per datatype, generate views, embed, score the five metrics.
+- Sample N items per datatype, read each view's stored text from `state.views.text`,
+  embed it, score the five metrics. The harness never calls the generator: generation is
+  not reproducible on either candidate provider (D10, D14), so regenerating per run would
+  fold that variance into every metric and confound the `--embedder` comparison.
 - Report per datatype and per view, not aggregated; exit non-zero on threshold breach.
 - `--embedder` override for A/B comparison on the real corpus.
 - Thresholds in config with the documented defaults.
 
 **Acceptance.** Harness runs against fakes in CI (asserting mechanics, not quality) and
-against live models when credentials are present. A deliberately degraded prompt is
-detected as a threshold breach.
+against a live embedder when one is reachable — no generator credentials are needed,
+since the harness does not generate. A deliberately degraded prompt is detected as a
+threshold breach, via a run that stores its views first.
+
+**Prerequisite.** A corpus with stored view text: `inget-fetch` then `inget run` for at
+least one datatype. Eval has nothing to read otherwise, and an empty sample must be
+reported as such rather than scored as a pass.
 
 ---
 

@@ -236,11 +236,6 @@ require touching the pipeline.
   tests it directly; that set must include deleted keys. Filtering it against the current
   fragment set instead — the obvious-looking refactor — makes a view whose only changed
   dependency was deleted look skippable, and it then stays stale forever.
-- **Drift is normalised by runes (`internal/delta/drift.go`).**
-  `levenshtein.ComputeDistance` measures in runes, so dividing by `len()` in bytes
-  understates drift on any non-ASCII string and suppresses the re-embed that
-  `drift_threshold` exists to trigger. The tests cover accented, CJK, emoji and
-  mixed-script text for exactly this reason.
 - **The composed document format is part of the cache key
   (`internal/delta/compose.go`).** Entries are joined `\n---\n` and headed `## <key>`.
   Changing the separator, the header or the ordering changes every level-2 hash and
@@ -355,13 +350,11 @@ require touching the pipeline.
   fragment moves — `delta.ViewInputHash` names its argument `scopedComposedHash` for that
   reason. `TestCascadeScopesViewInputToDependencies` asserts the stack view never sees the
   README.
-- **Drift is measured from the embedded text, not the last text
-  (`internal/pipeline/views.go`).** When a regeneration drifts less than `drift_threshold`,
-  `reuseVector` advances the level-2 hash but leaves `ViewState.Text` and `EmbeddedHash`
-  describing the stored vector. Updating `Text` there would make each comparison start from
-  the previous comparison, so a sequence of sub-threshold edits walks the view arbitrarily far
-  from what is indexed while every single step looks acceptable. A changed embedder model or
-  signature always forces a re-embed, whatever the drift.
+- **Vector reuse requires byte-identical text (`internal/pipeline/views.go`).**
+  `reuseVector` keeps a stored vector only when the new generated text hashes to the same
+  `EmbeddedHash` as the stored vector. Any textual change, however small, forces a
+  re-embed. A changed embedder model or signature also always forces a re-embed. The level-2
+  input hash (stage 7) is what protects the only paid operation (generation).
 - **`models.generator.concurrency` is one shared budget (`internal/pipeline/limiter.go`).**
   The fan-out is nested — the item pool spawns fragment derivations — so the permit set is
   run-scoped and both stages draw from it. Applying the limit at each level instead

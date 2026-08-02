@@ -96,9 +96,9 @@ func decoderOptions() []viper.DecoderConfigOption {
 }
 
 // normalize applies the documented defaults that no configuration layer can supply.
-// Viper cannot address list elements, so a datatype omitting `compose` or
-// `drift_threshold` has nothing to inherit from; the default is filled in here instead,
-// before hashing, so a hash always reflects effective behavior.
+// Viper cannot address list elements, so a datatype omitting `compose` has nothing to
+// inherit from; the default is filled in here instead, before hashing, so a hash always
+// reflects effective behavior.
 func normalize(c *Config) {
 	for i := range c.Datatypes {
 		d := &c.Datatypes[i]
@@ -107,10 +107,6 @@ func normalize(c *Config) {
 		}
 		if d.Compose.MaxChars == 0 {
 			d.Compose.MaxChars = DefaultComposeMaxChars
-		}
-		if d.DriftThreshold == nil {
-			threshold := DefaultDriftThreshold
-			d.DriftThreshold = &threshold
 		}
 	}
 }

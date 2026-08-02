@@ -49,11 +49,22 @@ services:
   # Text Embeddings Inference serving the model config.yaml names by default. Native width
   # is 1024, which is the pinned vector contract (D8), so no Matryoshka truncation is needed
   # on this path.
+  #
+  # TEI publishes one CPU image per host architecture and they are not multi-arch, so the
+  # tag has to match the machine: cpu-1.9 is x86_64, cpu-arm64-1.9 is aarch64. Override with
+  #   TEI_IMAGE_TAG=cpu-arm64-1.9 docker compose up
+  # On Apple Silicon prefer the Homebrew build instead — `brew install
+  # text-embeddings-inference`, then `text-embeddings-router --model-id
+  # Qwen/Qwen3-Embedding-0.6B --port 8090`. TEI in a container has no Metal or MPS access,
+  # so this service embeds on CPU cores only wherever it runs.
+  #
+  # TEI_HOST_PORT moves the published port when something already holds 8080; set
+  # models.embedder.base_url in config.local.yaml to match.
   embedder:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    image: ghcr.io/huggingface/text-embeddings-inference:${TEI_IMAGE_TAG:-cpu-1.9}
     command: ["--model-id", "Qwen/Qwen3-Embedding-0.6B", "--port", "8080"]
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${TEI_HOST_PORT:-8080}:8080"
     volumes:
       - embedder-cache:/data
     environment:

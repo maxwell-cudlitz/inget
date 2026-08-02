@@ -5,8 +5,6 @@
 // three processing levels (fragment enrichment, view composition, and embedding) so that
 // downstream stages can skip work whose inputs haven't changed.
 //
-// The engine also provides drift measurement (normalised Levenshtein distance) to detect
-// when regenerating a cached result might be worthwhile even though inputs haven't
-// structurally changed, and glob-based scoping to limit view recomputation to only the
+// The engine also provides glob-based scoping to limit view recomputation to only the
 // views whose dependency patterns match changed fragments.
 package delta

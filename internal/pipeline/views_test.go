@@ -25,12 +25,12 @@ func replaceViewPrompt(t *testing.T, h *cascadeHarness, view, template string) {
 	h.deps.Enrichers[view] = enrich.NewLLMEnricher(h.gen, prompt, enrich.LLMConfig{SchemaVersion: 1})
 }
 
-// TestReuseVector covers the level-3 guard. The interesting case is the third: text that
-// changed by less than the threshold keeps its vector *and* its recorded text, so the next
-// comparison is still measured against what was embedded.
+// TestReuseVector covers the level-3 guard. Reuse requires byte-identical text, a
+// matching embedder model and signature, and a stored vector (EmbeddedHash != ""). A
+// changed embedder model or signature always forces a re-embed.
 func TestReuseVector(t *testing.T) {
 	emb := model.NewFakeEmbedder("e5", 8)
-	ex := &execution{deps: Deps{Embedder: emb, Config: DatatypeConfig{DriftThreshold: 0.2}}}
+	ex := &execution{deps: Deps{Embedder: emb, Config: DatatypeConfig{}}}
 
 	embedded := "the quick brown fox jumps over the lazy dog"
 	prev := state.ViewState{
@@ -48,13 +48,13 @@ func TestReuseVector(t *testing.T) {
 		text      string
 		existing  state.ViewState
 		wantReuse bool
-		wantText  string
 	}{
-		{"identical text keeps the vector", embedded, prev, true, embedded},
-		{"sub-threshold change keeps the vector and the baseline", embedded + " today", prev, true, embedded},
-		{"large change re-embeds", "an entirely different sentence about cats", prev, false, ""},
-		{"never embedded must embed", embedded, state.ViewState{Name: "role"}, false, ""},
-		{"different embedder must embed", embedded, withSignature(prev, "other-embedder"), false, ""},
+		{"identical text keeps the vector", embedded, prev, true},
+		{"changed text re-embeds", embedded + " today", prev, false},
+		{"large change re-embeds", "an entirely different sentence about cats", prev, false},
+		{"never embedded must embed", embedded, state.ViewState{Name: "role"}, false},
+		{"different embedder model must embed", embedded, withModel(prev, "other-model"), false},
+		{"different embedder signature must embed", embedded, withSignature(prev, "other-embedder"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,9 +70,6 @@ func TestReuseVector(t *testing.T) {
 			if !reused {
 				return
 			}
-			if got.Text != tt.wantText {
-				t.Errorf("kept text = %q, want %q", got.Text, tt.wantText)
-			}
 			if got.EmbeddedHash != prev.EmbeddedHash {
 				t.Error("kept state should keep the hash of the stored vector")
 			}
@@ -81,6 +78,12 @@ func TestReuseVector(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withModel returns v with a different embedder model name.
+func withModel(v state.ViewState, model string) state.ViewState {
+	v.Model = model
+	return v
 }
 
 // withSignature returns v with a different embedder signature, standing in for a model swap.

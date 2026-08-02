@@ -73,12 +73,9 @@ type Derivation struct {
 
 // ViewState is one generated view of one item, carrying the level-2 and level-3 guards.
 //
-// Text is the text the stored vector was produced from, not simply the last text
-// generated. The two differ whenever a regeneration drifted less than drift_threshold and
-// so was not re-embedded (D4): keeping the embedded text here makes the next drift
-// comparison measure distance from the vector rather than from the previous comparison,
-// which is what stops a sequence of sub-threshold changes from walking the text
-// arbitrarily far away from what was actually indexed.
+// Text is the text the stored vector was produced from. Reuse requires that the new
+// generated text be byte-identical to Text; any change re-embeds. An embedder model or
+// signature change also forces a re-embed regardless of text.
 type ViewState struct {
 	Name         string
 	InputHash    string // level-2 guard, scoped to the view's dependency globs

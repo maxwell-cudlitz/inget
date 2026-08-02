@@ -90,7 +90,6 @@ func TestValidate(t *testing.T) {
 		{"fragment enricher chars", func(c *Config) { c.Datatypes[0].FragmentEnricher.MaxInputChars = 0 }, "fragment_enricher.max_input_chars"},
 		{"compose order", func(c *Config) { c.Datatypes[0].Compose.Order = "alphabetical" }, "compose.order"},
 		{"compose max chars", func(c *Config) { c.Datatypes[0].Compose.MaxChars = 0 }, "compose.max_chars"},
-		{"drift threshold", func(c *Config) { threshold := 1.5; c.Datatypes[0].DriftThreshold = &threshold }, "drift_threshold"},
 		{"metadata field key", func(c *Config) { c.Datatypes[0].MetadataFields = map[string]string{"": "x"} }, "metadata_fields key is required"},
 
 		{"no views", func(c *Config) { c.Datatypes[0].Views = nil }, "views is required"},

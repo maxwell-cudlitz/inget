@@ -25,7 +25,6 @@ const SupportedVersion = 1
 const (
 	DefaultComposeOrder    = "tier"
 	DefaultComposeMaxChars = 120000
-	DefaultDriftThreshold  = 0.02
 )
 
 // Config is the effective configuration after layering, decoding and validation.
@@ -168,7 +167,6 @@ type Datatype struct {
 	Enricher         string            `mapstructure:"enricher"`
 	FragmentEnricher FragmentEnricher  `mapstructure:"fragment_enricher"`
 	Compose          Compose           `mapstructure:"compose"`
-	DriftThreshold   *float64          `mapstructure:"drift_threshold"`
 	Destinations     []string          `mapstructure:"destinations"`
 	References       []Reference       `mapstructure:"references"`
 	MetadataFields   map[string]string `mapstructure:"metadata_fields"`
