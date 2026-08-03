@@ -105,6 +105,7 @@ func (c *Config) validateDatatypes(v *validator) {
 		}
 		v.enum(path+".compose.order", d.Compose.Order, "tier", "path")
 		v.positive(path+".compose.max_chars", int64(d.Compose.MaxChars))
+		c.validateComposeFits(v, path, d)
 		for key := range d.MetadataFields {
 			v.required(path+".metadata_fields key", key)
 		}
@@ -113,6 +114,39 @@ func (c *Config) validateDatatypes(v *validator) {
 		c.validateReferences(v, path, d.References)
 	}
 	v.unique("datatypes", names)
+}
+
+// promptMarginChars is the largest room a composed document must leave under the generator's
+// input bound for the prompt template that wraps it, and marginFraction is the share of a
+// smaller bound to reserve instead.
+//
+// A view prompt is instructions plus an injection guard plus the document, and the generator
+// rejects — never truncates — a prompt over models.generator.max_input_chars. So compose.max_chars
+// equal to that bound is not "the maximum that fits", it is a guaranteed failure for every item
+// large enough to reach the cap, discovered after the fragment derivations have been paid for.
+// The shipped templates are under 2 KB, so 8 KB is generous; the fraction is what keeps the rule
+// meaningful for a small local model, where a fixed 8 KB would reject every valid configuration.
+const (
+	promptMarginChars = 8192
+	marginFraction    = 8
+)
+
+// validateComposeFits checks that a composed document plus its prompt template can be sent.
+func (c *Config) validateComposeFits(v *validator, path string, d Datatype) {
+	maxChars := d.Compose.MaxChars
+	if maxChars == 0 {
+		maxChars = DefaultComposeMaxChars
+	}
+	limit := c.Models.Generator.MaxInputChars
+	if limit <= 0 || maxChars <= 0 {
+		return // the missing bound is reported by its own check
+	}
+	margin := min(promptMarginChars, limit/marginFraction)
+	if maxChars+margin > limit {
+		v.failf("%s.compose.max_chars = %d leaves no room under models.generator.max_input_chars = %d "+
+			"for the prompt template around the document; keep it at or below %d",
+			path, maxChars, limit, limit-margin)
+	}
 }
 
 // validateViews checks that every view is named, prompted and scoped by valid globs.

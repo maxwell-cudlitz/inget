@@ -9,7 +9,7 @@ datatypes:
         prompt: prompts/git/repo/role.tmpl
         name: role
     compose:
-      max_chars: 5000
+      max_chars: 3000
       order: tier
     fragment_enricher:
       max_input_chars: 1000

@@ -30,4 +30,8 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	CacheHitTokens   int
+	// ReasoningTokens is the share of CompletionTokens a thinking model spent before it began
+	// answering. Reported for diagnosis: it is billed at the output rate and spent from the
+	// same allowance, so an empty answer and a long one look identical without it.
+	ReasoningTokens int
 }

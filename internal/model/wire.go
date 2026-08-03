@@ -19,6 +19,11 @@ type chatRequest struct {
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ReasoningContent is a thinking model's private chain of thought, returned beside
+	// Content rather than inside it. It is decoded only so that an empty answer can say
+	// whether the budget went on reasoning; it is never logged, stored or embedded, and
+	// omitempty keeps it out of requests.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type chatResponse struct {
@@ -32,10 +37,19 @@ type chatChoice struct {
 }
 
 type chatUsageBlock struct {
-	PromptTokens        int                 `json:"prompt_tokens"`
-	CompletionTokens    int                 `json:"completion_tokens"`
-	TotalTokens         int                 `json:"total_tokens"`
-	PromptTokensDetails promptTokensDetails `json:"prompt_tokens_details"`
+	PromptTokens            int                     `json:"prompt_tokens"`
+	CompletionTokens        int                     `json:"completion_tokens"`
+	TotalTokens             int                     `json:"total_tokens"`
+	PromptTokensDetails     promptTokensDetails     `json:"prompt_tokens_details"`
+	CompletionTokensDetails completionTokensDetails `json:"completion_tokens_details"`
+}
+
+// completionTokensDetails reports how much of the output allowance a thinking model spent
+// before it began answering. Nothing decides anything on it, but "the budget went on
+// reasoning" is otherwise indistinguishable from "the answer was too long", and those have
+// different fixes.
+type completionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // promptTokensDetails is the OpenAI extension block reporting context-cache hits, which

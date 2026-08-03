@@ -121,6 +121,16 @@ type Store interface {
 	// PutSignature records the current signature for a scope.
 	PutSignature(ctx context.Context, scope, signature string) error
 
+	// ConsumedArtifactRun returns the newest artifact run this datatype has finished
+	// consuming, or "" when none has been recorded. Absence means "only the latest run is
+	// pending", which is the behaviour of a store that predates the mark.
+	ConsumedArtifactRun(ctx context.Context, datatype string) (string, error)
+
+	// PutConsumedArtifactRun advances the mark. It moves forward only: an identifier that
+	// is not newer than the recorded one is ignored rather than rewinding the mark and
+	// replaying work.
+	PutConsumedArtifactRun(ctx context.Context, datatype, runID string) error
+
 	// StartRun records a run as running.
 	StartRun(ctx context.Context, r Run) error
 

@@ -1720,3 +1720,148 @@ The no-spend variant it documents (`enricher: passthrough`, `fragment_enricher.e
 settle: how to exercise the whole path on a real corpus without a generator bill. It lowers
 `max_chars` because passthrough embeds the composed document verbatim, and the shipped 120000
 characters is at or past the embedder's input limit.
+
+## Post-step work, 2026-08-02
+
+### Fragment input is bounded, and the estimate stopped pricing what is never sent
+
+`fragment_enricher.max_input_chars` fed only the enricher signature: the whole file was rendered
+into the prompt, and `models.generator.max_input_chars` then rejected anything over 120,000
+characters. Both halves were wrong — a 1 MB file failed the run instead of costing money, and the
+setting documented a bound nothing applied. It now truncates in `enrich.FragmentLLMEnricher`, at a
+rune-safe line boundary with a notice appended, and the fragment enricher's schema version is 2
+because derivations cached under 1 came from untruncated content.
+
+`inget plan` was reporting $10.34 for a 50-repository corpus. Three of the four causes were
+estimation rather than spend: input priced without either truncation bound, 418 fragments with no
+stored blob counted as derivations (the pipeline also sent a blank-data prompt for each, now
+skipped), and output priced at the full `max_output_tokens` for every call. The last one stays —
+it is the documented upper bound — so the same artifact run now prices at $7.64 with input at
+17.6M tokens rather than 36.1M.
+
+### The connector's path filter cannot see content
+
+The fourth cause was real: a JVM heap dump (`java_pid26365.hprof`, 15 MB in 1 MiB pieces), webpack
+bundles, wordlists, CDP protocol dumps and CSV exports were being summarised one file at a time.
+`internal/source/github/content.go` judges shape once bytes are in hand and before splitting, so a
+dump is one decision rather than sixteen: non-text at any size, and above 256 KB a longest line
+over 5,000 bytes, a mean line under 16 bytes, or a bulk extension.
+
+The mean-line bound was 40 in the first draft and flagged a 275 KB hand-written Rust file, which
+averages 34 bytes a line. That measurement is why the bound is 16 and why bulk extensions carry
+the cases a mean cannot: nobody hand-writes 256 KB of JSON. Measured over the sample corpus: 119.5
+MB of fragment content down to 88.3 MB by shape, plus 25.5 MB the new path patterns never
+transfer, with no source file among the exclusions.
+
+### The consumer drains the artifact backlog (extends D6)
+
+D6 defines full and partial scope; it does not say how many runs a consumer reads. Reading only
+the newest was implicit, and it makes a many-producer topology silently lossy: with one run per
+item — a CI job announcing its own repository — every submission but the last is never read, and
+nothing complains, because a partial run proves nothing about the items it omits.
+
+`inget_state.consumed_artifacts` (migration 00003) records how far each datatype has consumed and
+`inget run` drains everything past it, oldest first. The mark advances only behind a pass with no
+failed item, not narrowed by `--only` or `--limit`, and not interrupted — anything else means read
+this run again, which costs one reconcile and lets the failure retry. An unmarked datatype
+consumes the latest run only, so adopting the mark does not replay a month of retained runs, and
+the upsert is guarded so it cannot rewind.
+
+Two consequences recorded rather than fixed. A plan over a backlog prices only the oldest pending
+run, making it a lower bound where every other estimate is an upper bound; `pending_artifact_runs`
+and a warning are what say so. Summing per-run estimates would double-count, because state does
+not advance during a plan. And `inget state gc` collects runs past `retention.runs` whether or not
+they were consumed, so the drain has to keep up with retention.
+
+`docs/self-submission.md` is the worked example: `inget-fetch --only "$GITHUB_REPOSITORY"` in a
+push workflow, shared artifact storage, and a consumer elsewhere. It needs no new code — the
+artifact store is the submission interface, and `inget run`/`inget plan` never construct a
+connector.
+
+### The view prompts asked for more than the output budget allowed (2026-08-02)
+
+The first real `inget run` against DeepSeek failed every item it reached: 50 work items, 2,657
+fragment derivations cached, zero views, zero vectors. Each item died on `role`, the first of its
+eight views, with `finish_reason: length` — and so never attempted the other seven.
+
+The cause was in the prompts, not the model. `role` and `internals` asked for "3-6 paragraphs" of
+"clear, detailed description" while `models.generator.max_output_tokens` is 1024, which is roughly
+four short paragraphs. The generator treats a `length` finish as a hard error, which is right: a
+description truncated mid-sentence should not be embedded and cached as though it were complete.
+The view prompts now ask for 1-3 short paragraphs and say to stop, and `aliases` is bounded at 40
+lines.
+
+Shortening the prompts was preferred over raising the budget for two reasons. `max_output_tokens`
+is part of the fragment enricher's signature, so raising it would have invalidated the 2,657
+derivations already paid for; and a view is embedded as a single vector, where density retrieves
+and padding does not.
+
+The same run surfaced a second, independent failure: `compose.max_chars` was 120000 and so was
+`models.generator.max_input_chars`. Because the generator rejects rather than truncates an
+oversized prompt, every item whose composition reached the cap failed on the template's own bytes
+— HelloGitHub composed to exactly 120,000 and produced a 121,570-character prompt. Two changes
+follow. `validateComposeFits` now requires a margin of `min(8192, max_input_chars/8)`, so the
+misconfiguration fails at startup instead of after the derivations underneath it have been bought.
+And `DefaultComposeMaxChars` is 100000 rather than the 120000 in the design document: a default
+equal to the shipped input bound is a default that cannot be used.
+
+Test fixtures carrying `compose.max_chars: 5000` against `max_input_chars: 4096` were themselves
+invalid under the new rule — they described a document that could never be sent — and were
+corrected rather than exempted.
+
+### Thinking mode was spending the whole output budget (2026-08-02)
+
+Shortening the view prompts was not enough: `role` still failed with `finish_reason: "length"` on
+large repositories, and items that got past `role` failed on `internals`. The cause was not the
+prompts at all. DeepSeek V4 Flash enables thinking by default, reasoning tokens are generated
+inside `max_tokens` and billed at the output rate, and one published live test exhausted a
+512-token allowance entirely on reasoning before producing any answer. Against a 100,000-character
+composed document the 1024-token budget was gone before the first word of the description.
+
+Two further consequences of the same contract, both silent. Reasoning is billed at the output
+rate, so every fragment derivation was paying for thinking nobody read. And DeepSeek documents
+that `temperature`, `top_p` and `seed` have no effect in thinking mode — so the determinism the
+cascade's cache keys claim, and which `buildSignature` records as `temperature=0,seed=1`, was not
+being provided by the model.
+
+`models.generator.request_options` is the fix, and it is deliberately generic rather than a
+`thinking:` field: an opaque map merged into the chat completion body, so DeepSeek's toggle, a
+reasoning effort, or some future provider's parameter all work without touching this code. It
+feeds the generator signature for the usual reason (D2) — a parameter that changes output must
+invalidate what was cached under the old value. Keys the client sets from typed configuration are
+refused at config load, because a `max_tokens` smuggled through the map would void every
+truncation guard while the signature still claimed the old budget.
+
+The shipped config disables thinking. These are summarisation tasks; the reasoning bought nothing
+and cost the budget it needed to answer.
+
+Cost of the change, recorded because it is the kind of thing that should be visible: it
+invalidated 4,091 cached derivations, about $1.50 of already-spent generation, and the user
+accepted that. It pays for itself over the remaining ~13,600, which no longer buy reasoning
+tokens.
+
+One gap observed and not fixed: `inget_state.signatures` was empty after two runs, so `inget plan`
+could not warn that this change invalidated everything. `recordSignatures` runs at the end of a
+run, and neither run reached it — the first errored out of `runWorkers` and the second was
+interrupted with a cancelled context. The warning exists precisely to make a mass invalidation
+visible before it is paid for, and it is blind until a run finishes cleanly once.
+
+### A list prompt needs a countable bound, and a failed view is expensive (2026-08-02)
+
+With thinking disabled, seven of the eight `github/repo` views completed and every remaining
+failure was `aliases`: 12 items done, 79 views, 79 vectors, 31 items failed on the eighth view.
+"Output a flat list … at most 40 lines" was not a bound the model kept — four numbered input
+categories and "include both technical and plain-language variations" produced a headed, sectioned
+answer past 1024 tokens. The prompt now states the output shape as a hard requirement: at most 25
+lines total, six words a line, no headings or numbering or commentary, stop after the last term.
+Roughly 220 tokens against a 1024 budget.
+
+The failure exposed a cost amplifier worth recording. `CheckpointItem` writes an item's guards in
+one transaction, so an item that fails on its eighth view discards the seven generations that
+succeeded, and the retry pays for all eight again — about 217 wasted generations across those 31
+items. The atomicity is right: a stored view claims that generation, embedding and upsert all
+happened. What is missing is the level-2 equivalent of the derivation cache — generated view text
+keyed by view name, composed-input hash and enricher signature, so a failure elsewhere in the item
+does not discard work already paid for. The fragment cache is exactly what made these retries cheap
+on the derivation side; views have no such thing. Left as a follow-up because it is another state
+table, not a config change.

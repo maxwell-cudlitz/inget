@@ -107,7 +107,16 @@ type Plan struct {
 	WorkItems   []string `json:"work_items"`
 	Tombstones  []string `json:"tombstones"`
 	Resuming    bool     `json:"resuming"`
-	Estimate    Estimate `json:"estimate"`
+	// PendingArtifactRuns is how many committed artifact runs this datatype still owes work
+	// to, this one included. More than one means a producer committed several runs since the
+	// last clean pass — one CI job per item, typically — and `inget run` will drain them all
+	// while this estimate covers only the run named in ArtifactRunID.
+	PendingArtifactRuns int `json:"pending_artifact_runs"`
+	// Restricted reports that --only or --limit narrowed the work set, so this pass cannot
+	// speak for the whole artifact run: no tombstones are applied and the artifact
+	// high-water mark does not advance.
+	Restricted bool     `json:"restricted"`
+	Estimate   Estimate `json:"estimate"`
 }
 
 // execution is the per-run state every worker needs: dependencies, the artifact run being

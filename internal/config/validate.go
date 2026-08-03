@@ -18,6 +18,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 // Validate reports every problem in the configuration as a joined error.
@@ -110,6 +112,9 @@ func (c *Config) validateModels(v *validator) {
 	v.positive("models.generator.max_input_chars", int64(g.MaxInputChars))
 	v.nonNegative("models.generator.price_per_mtok_in", g.PricePerMTokIn)
 	v.nonNegative("models.generator.price_per_mtok_out", g.PricePerMTokOut)
+	if err := model.ValidateRequestOptions(g.RequestOptions); err != nil {
+		v.failf("models.generator.request_options: %s", err)
+	}
 
 	e := c.Models.Embedder
 	v.client("models.embedder", e.ModelClient)

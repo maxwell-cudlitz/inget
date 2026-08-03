@@ -21,6 +21,7 @@ func conformanceCases() []storeCase {
 		viewCases,
 		refCases,
 		signatureCases,
+		consumedCases,
 		runCases,
 		workCases,
 		checkpointCases,

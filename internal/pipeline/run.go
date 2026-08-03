@@ -1,7 +1,9 @@
-// Run lifecycle: lock acquisition, resumption, tombstones, and completion.
+// Run lifecycle: the artifact backlog, lock acquisition, resumption, tombstones, and
+// completion.
 //
-// Run is the entrypoint for a pipeline execution. It reconciles, estimates, resolves the
-// run row, applies tombstones, and hands the work queue to the pool in workers.go.
+// Run is the entrypoint for a pipeline execution. It resolves which committed artifact runs
+// are still owed work, then for each one reconciles, estimates, resolves the run row, applies
+// tombstones, and hands the work queue to the pool in workers.go.
 package pipeline
 
 import (
@@ -13,21 +15,33 @@ import (
 	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
-// Run executes a full pipeline run for the configured datatype.
+// Run executes a full pipeline run for the configured datatype, draining the artifact backlog.
 //
-// In dry-run mode (rc.DryRun) it reconciles, estimates, and returns the plan without
-// taking the datatype lock, claiming work, or calling a model: a plan is a read, and
-// failing it because a run holds the lock would make the cost guard unavailable exactly
-// when someone is about to spend money.
+// In dry-run mode (rc.DryRun) it reconciles the oldest pending artifact run, estimates it, and
+// returns the plan without taking the datatype lock, claiming work, or calling a model: a plan
+// is a read, and failing it because a run holds the lock would make the cost guard unavailable
+// exactly when someone is about to spend money. The plan reports the whole backlog in
+// PendingArtifactRuns but prices only the run it describes, so a backlog of more than one is
+// warned about rather than silently under-quoted.
 func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*Plan, *Stats, error) {
 	cfg := deps.Config
 	slog.InfoContext(ctx, "pipeline starting",
 		"datatype", cfg.Name, "concurrency", rc.Concurrency, "dry_run", rc.DryRun)
 
+	pending, err := pendingRuns(ctx, deps, arts)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if rc.DryRun {
-		result, err := planOnly(ctx, deps, arts, rc)
+		result, err := planOnly(ctx, deps, arts, rc, pending[0])
 		if err != nil {
 			return nil, nil, err
+		}
+		result.plan.PendingArtifactRuns = len(pending)
+		if len(pending) > 1 {
+			slog.WarnContext(ctx, "the backlog holds more than one artifact run; the estimate prices the oldest",
+				"datatype", cfg.Name, "pending_runs", len(pending), "priced_run", pending[0])
 		}
 		return &result.plan, nil, nil
 	}
@@ -42,7 +56,66 @@ func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*P
 		}
 	}()
 
-	result, err := planOnly(ctx, deps, arts, rc)
+	return drain(ctx, deps, arts, rc, pending)
+}
+
+// drain consumes each pending artifact run in turn, advancing the high-water mark behind it.
+//
+// The returned plan is the last one processed and the stats are the invocation's total. An
+// error stops the drain: whatever it was, the next run in the backlog would meet it too, and
+// the mark still names the last run that finished cleanly.
+func drain(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, pending []string) (*Plan, *Stats, error) {
+	cfg := deps.Config
+	total := &Stats{}
+	advancing := true
+	var last *Plan
+
+	for i, artifactRunID := range pending {
+		plan, stats, err := consume(ctx, deps, arts, rc, artifactRunID)
+		if plan != nil {
+			plan.PendingArtifactRuns = len(pending) - i
+			last = plan
+		}
+		if err != nil {
+			return last, nil, err
+		}
+		total.add(stats)
+
+		// A restricted or partly failed pass leaves the mark where it is, so the same
+		// artifact run is reconciled again next invocation and its unfinished items retry.
+		// Once that has happened the mark must not jump over it either, which is what
+		// advancing tracks.
+		clean := stats != nil && stats.ItemsFailed == 0 && !ShuttingDown(ctx) && !rc.DryRun && plan != nil && !plan.Restricted
+		if advancing && clean {
+			if err := deps.State.PutConsumedArtifactRun(ctx, cfg.Name, artifactRunID); err != nil {
+				return last, nil, err
+			}
+		} else {
+			advancing = false
+			slog.InfoContext(ctx, "leaving the artifact mark where it is",
+				"datatype", cfg.Name, "artifact_run_id", artifactRunID,
+				"failed_items", failedCount(stats), "restricted", plan != nil && plan.Restricted)
+		}
+		if ShuttingDown(ctx) {
+			slog.InfoContext(ctx, "shutdown requested, stopping the drain",
+				"datatype", cfg.Name, "consumed", i+1, "pending", len(pending))
+			break
+		}
+	}
+	return last, total, nil
+}
+
+// failedCount is the failure count of a possibly absent stats snapshot, for one log field.
+func failedCount(stats *Stats) int {
+	if stats == nil {
+		return 0
+	}
+	return stats.ItemsFailed
+}
+
+// consume processes exactly one artifact run: reconcile, resolve the run row, tombstone, work.
+func consume(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, artifactRunID string) (*Plan, *Stats, error) {
+	result, err := planOnly(ctx, deps, arts, rc, artifactRunID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,7 +130,7 @@ func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*P
 	stats := &statsCollector{}
 	if err := processTombstones(ctx, deps, result.tombstones, stats); err != nil {
 		_ = deps.State.FinishRun(ctx, runID, state.RunFailed, nil)
-		return nil, nil, err
+		return &result.plan, nil, err
 	}
 
 	final, err := runWorkers(ctx, deps, arts, rc, runID, result, stats)
@@ -67,11 +140,11 @@ func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*P
 	return &result.plan, final, nil
 }
 
-// planOnly reconciles the artifact run against state, surfaces any signature change, and — in
+// planOnly reconciles one artifact run against state, surfaces any signature change, and — in
 // plan mode — estimates what the work would cost. Both modes go through it, which is what makes
 // `inget plan` and `inget run` agree on the work set by construction rather than by review.
-func planOnly(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*reconcileResult, error) {
-	result, err := reconcile(ctx, deps, arts, rc)
+func planOnly(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, artifactRunID string) (*reconcileResult, error) {
+	result, err := reconcile(ctx, deps, arts, rc, artifactRunID)
 	if err != nil {
 		return nil, err
 	}

@@ -57,6 +57,11 @@ func TestValidate(t *testing.T) {
 		{"generator concurrency", func(c *Config) { c.Models.Generator.Concurrency = 0 }, "models.generator.concurrency"},
 		{"generator timeout", func(c *Config) { c.Models.Generator.Timeout = 0 }, "models.generator.timeout"},
 		{"generator price", func(c *Config) { c.Models.Generator.PricePerMTokIn = -0.1 }, "models.generator.price_per_mtok_in"},
+		// A request option that replaced max_tokens would silently void the budget every
+		// truncation guard is written against.
+		{"generator request option collides", func(c *Config) {
+			c.Models.Generator.RequestOptions = map[string]any{"max_tokens": 4096}
+		}, "models.generator.request_options"},
 
 		{"embedder dimensions", func(c *Config) { c.Models.Embedder.Dimensions = 0 }, "models.embedder.dimensions"},
 		{"embedder negative truncation", func(c *Config) { c.Models.Embedder.TruncateDims = -2 }, "models.embedder.truncate_dims"},
@@ -95,6 +100,15 @@ func TestValidate(t *testing.T) {
 		{"fragment enricher chars", func(c *Config) { c.Datatypes[0].FragmentEnricher.MaxInputChars = 0 }, "fragment_enricher.max_input_chars"},
 		{"compose order", func(c *Config) { c.Datatypes[0].Compose.Order = "alphabetical" }, "compose.order"},
 		{"compose max chars", func(c *Config) { c.Datatypes[0].Compose.MaxChars = 0 }, "compose.max_chars"},
+		// A composed document sized at the generator's input bound cannot be sent: the prompt
+		// template around it pushes the request over. Caught here rather than after the run has
+		// paid for the fragment derivations underneath it.
+		{"compose fills the input bound", func(c *Config) {
+			c.Datatypes[0].Compose.MaxChars = c.Models.Generator.MaxInputChars
+		}, "leaves no room under models.generator.max_input_chars"},
+		{"compose within the margin", func(c *Config) {
+			c.Datatypes[0].Compose.MaxChars = c.Models.Generator.MaxInputChars - 8
+		}, "leaves no room under models.generator.max_input_chars"},
 		{"metadata field key", func(c *Config) { c.Datatypes[0].MetadataFields = map[string]string{"": "x"} }, "metadata_fields key is required"},
 
 		{"no views", func(c *Config) { c.Datatypes[0].Views = nil }, "views is required"},

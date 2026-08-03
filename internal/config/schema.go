@@ -23,8 +23,11 @@ const SupportedVersion = 1
 // config.yaml alone because viper cannot address list elements, so a datatype that
 // omits the key has no layer to inherit it from.
 const (
-	DefaultComposeOrder    = "tier"
-	DefaultComposeMaxChars = 120000
+	DefaultComposeOrder = "tier"
+	// DefaultComposeMaxChars sits below models.generator.max_input_chars rather than at it: the
+	// prompt template wrapping the document needs room, and a generator rejects an oversized
+	// prompt rather than truncating it. See validateComposeFits.
+	DefaultComposeMaxChars = 100000
 )
 
 // Documented defaults for the quality harness (D14). They are filled in by normalize when
@@ -143,6 +146,12 @@ type Generator struct {
 	MaxInputChars   int     `mapstructure:"max_input_chars"`
 	PricePerMTokIn  float64 `mapstructure:"price_per_mtok_in"`
 	PricePerMTokOut float64 `mapstructure:"price_per_mtok_out"`
+	// RequestOptions are merged into the chat completion request body, for the parameters a
+	// specific provider adds to the OpenAI shape — DeepSeek's `thinking`, a reasoning effort,
+	// a top_k. They feed the generator signature, because a parameter that changes output must
+	// invalidate what was cached under the previous value. Keys this client sets itself
+	// (model, messages, temperature, seed, max_tokens, stream) are rejected.
+	RequestOptions map[string]any `mapstructure:"request_options"`
 }
 
 // Embedder configures the embedding role. TruncateDims is the Matryoshka target width;

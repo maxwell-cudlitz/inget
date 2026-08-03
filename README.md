@@ -93,10 +93,12 @@ destination, takes no lock and calls no model — and reports the fragment deriv
 generations, estimated tokens and cost a run would spend, plus any prompt or model change
 that has invalidated cached work. Its estimates are upper bounds: every call is priced at the
 full output budget, though input is priced at what will actually be sent, since both stages
-truncate before they call.
+truncate before they call. The one exception is a backlog: `pending_artifact_runs` above 1 means
+`inget run` will drain several artifact runs while the estimate prices the oldest, so the number
+is a floor rather than a ceiling.
 
 Cost is dominated by fragment derivation — one call per file — so two settings decide what a run
-costs. `fragment_enricher.max_input_chars` bounds each file: content over it is truncated, not
+costs.`fragment_enricher.max_input_chars` bounds each file: content over it is truncated, not
 rejected, because a summary of the first 8,000 characters says what a file is and the rest buys a
 summary of the same length. The connector's noise filter decides which files exist at all: it
 drops dependencies, generated output, lockfiles and fixtures by path, and then drops binaries,
@@ -138,6 +140,12 @@ as JSON on stdout. Three things it does that are worth knowing:
 domain, so it is recorded as partial and issues no tombstones: an item it never looked at
 is not an item that was deleted. Only a complete, untruncated run can conclude that
 something was removed at the source.
+
+Because `inget-fetch` assumes nothing about running beside the consumer, a repository can index
+itself: point it at shared artifact storage from its own CI and it submits one partial run per
+push, which a scheduled `inget run` elsewhere drains. No endpoint and no new code are involved —
+the artifact store is the interface. See [`docs/self-submission.md`](docs/self-submission.md) for
+the workflow and the semantics that keeps it safe.
 
 ### Quality
 
@@ -284,6 +292,13 @@ Three things are worth knowing before you edit it:
   nothing, and validation reports every problem at once — required fields, unknown source
   or destination names, out-of-range values, and invalid dependency globs.
 - **Durations accept days.** `30d`, `1d12h` and `120s` all work.
+- **Provider-specific model parameters go in `models.generator.request_options`.** The map is
+  merged into the chat completion request body, so anything a provider adds to the OpenAI shape
+  works without a code change. The shipped config uses it to disable DeepSeek's thinking mode,
+  which is on by default and spends `max_output_tokens` on reasoning before it answers — and which
+  also makes `temperature` and `seed` ineffective, so the pipeline's determinism depends on it
+  being off. Every key feeds the generator signature, so changing one invalidates cached
+  derivations and views, which is correct: it changes what the model returns.
 
 Secrets never appear in config files. Config names the environment variable that holds a
 secret (`token_env: INGET_GITHUB_TOKEN`) and the process reads it at startup. A variable
@@ -361,6 +376,11 @@ Two properties follow from this block. A second run over the same datatype exits
 immediately rather than duplicating work, which is what makes overlapping cron ticks safe.
 And progress is checkpointed per item, so a run interrupted 80% of the way through resumes
 at 80% instead of paying for the first 80% again.
+
+State also records how far each datatype has consumed its producer's output, so `inget run`
+drains every committed artifact run newer than that mark rather than only the newest. `inget
+state show` reports both ends — `latest_artifact_run` and `consumed_artifact_run` — and a gap
+between them is a backlog waiting to be enriched.
 
 ## For developers
 

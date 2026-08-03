@@ -36,11 +36,14 @@ func stateCommand() *cobra.Command {
 
 // stateReport is one datatype's persisted state.
 type stateReport struct {
-	Datatype         string            `json:"datatype"`
-	Source           string            `json:"source"`
-	LatestArtifactID string            `json:"latest_artifact_run,omitempty"`
-	Counts           state.Counts      `json:"counts"`
-	Runs             []state.RunRecord `json:"recent_runs"`
+	Datatype         string `json:"datatype"`
+	Source           string `json:"source"`
+	LatestArtifactID string `json:"latest_artifact_run,omitempty"`
+	// ConsumedArtifactID is how far the enrichment side has drained. Behind
+	// LatestArtifactID means a backlog: runs committed but not yet enriched.
+	ConsumedArtifactID string            `json:"consumed_artifact_run,omitempty"`
+	Counts             state.Counts      `json:"counts"`
+	Runs               []state.RunRecord `json:"recent_runs"`
 }
 
 // stateShowCommand builds `inget state show`.
@@ -51,8 +54,8 @@ func stateShowCommand() *cobra.Command {
 		Use:   "show [datatype]",
 		Short: "Report what each cascade level holds",
 		Long: "show reports per datatype how many items, fragments, derivations, views, vectors and\n" +
-			"reference edges are persisted, the newest committed artifact run, and how the recent\n" +
-			"runs ended. It writes nothing.",
+			"reference edges are persisted, the newest committed artifact run, how far the\n" +
+			"enrichment side has consumed it, and how the recent runs ended. It writes nothing.",
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -93,14 +96,20 @@ func runStateShow(cmd *cobra.Command, args []string, history int) error {
 		if err != nil {
 			return err
 		}
+		consumed, err := store.ConsumedArtifactRun(cmd.Context(), dt.Name)
+		if err != nil {
+			return err
+		}
 		report := stateReport{Datatype: dt.Name, Source: dt.Source, Counts: counts, Runs: runs}
 		report.LatestArtifactID = latestArtifact(cmd.Context(), arts, dt)
+		report.ConsumedArtifactID = consumed
 		reports = append(reports, report)
 		slog.InfoContext(cmd.Context(), "state", "datatype", dt.Name,
 			"items", counts.Items, "tombstoned", counts.Tombstoned, "fragments", counts.Fragments,
 			"derivations", counts.Derivations, "views", counts.Views,
 			"embedded_views", counts.EmbeddedViews, "stale_refs", counts.StaleRefs,
-			"latest_artifact_run", report.LatestArtifactID)
+			"latest_artifact_run", report.LatestArtifactID,
+			"consumed_artifact_run", report.ConsumedArtifactID)
 	}
 	return printJSON(reports)
 }

@@ -65,6 +65,19 @@ models:
     timeout: 120s
     price_per_mtok_in: 0.14            # for `inget plan` cost estimates
     price_per_mtok_out: 0.28
+    # Merged into the chat completion request body, for parameters a provider adds to the
+    # OpenAI shape. Every key here feeds the generator signature, so changing one invalidates
+    # cached derivations and views — which is correct, since it changes what the model returns.
+    #
+    # DeepSeek V4 enables thinking by default, and reasoning tokens are spent from
+    # max_output_tokens and billed at the output rate. Left on, a 1024-token budget is consumed
+    # by reasoning before the answer starts and every view fails with finish_reason "length";
+    # temperature and seed are also ignored while it is on, so the determinism this pipeline's
+    # cache keys claim would not exist. These are summarisation tasks: the reasoning buys
+    # nothing and costs the budget.
+    request_options:
+      thinking:
+        type: disabled
   embedder:
     driver: openai
     base_url: "http://localhost:8080/v1"
@@ -135,7 +148,10 @@ datatypes:
                                        # bill.
     compose:
       order: tier                      # tier | path
-      max_chars: 120000
+      # Must leave room under models.generator.max_input_chars for the prompt template that
+      # wraps the composed document: at 120000 for both, an item that composes to the cap
+      # fails the request on the template's own bytes. Config validation enforces the margin.
+      max_chars: 100000
     destinations: [local-pgvector]
     views:
       - name: role

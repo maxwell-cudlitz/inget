@@ -84,7 +84,7 @@ datatypes:
       enabled: false
     compose:
       order: tier
-      max_chars: 5000
+      max_chars: 3000
     destinations: [vectors]
     views:
       - name: role

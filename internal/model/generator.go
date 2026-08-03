@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,9 @@ type OpenAIGeneratorConfig struct {
 	MaxOutputTokens int
 	MaxInputChars   int // 0 disables the check
 	Timeout         time.Duration
+	// RequestOptions are provider-specific fields merged into the request body, from
+	// models.generator.request_options. See options.go.
+	RequestOptions map[string]any
 }
 
 // openAIGenerator implements Generator over the /v1/chat/completions endpoint.
@@ -72,7 +76,7 @@ func (g *openAIGenerator) Generate(ctx context.Context, prompt string) (string, 
 		MaxTokens:   g.cfg.MaxOutputTokens,
 	}
 
-	data, err := json.Marshal(body)
+	data, err := encodeRequest(body, g.cfg.RequestOptions)
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("model: marshaling request: %w", err)
 	}
@@ -94,15 +98,17 @@ func (g *openAIGenerator) Generate(ctx context.Context, prompt string) (string, 
 	}
 
 	choice := resp.Choices[0]
+	reasoning := resp.Usage.CompletionTokensDetails.ReasoningTokens
 	if choice.FinishReason == "length" {
 		return "", Usage{}, fmt.Errorf(
-			"model: %s returned finish_reason \"length\": the output was truncated; "+
-				"raise models.generator.max_output_tokens", url)
+			"model: %s returned finish_reason \"length\": the output was truncated at "+
+				"max_output_tokens=%d after %d reasoning tokens%s",
+			url, g.cfg.MaxOutputTokens, reasoning, budgetAdvice(reasoning, g.cfg.MaxOutputTokens))
 	}
 	if strings.TrimSpace(choice.Message.Content) == "" {
 		return "", Usage{}, fmt.Errorf(
-			"model: %s returned empty content: the model produced no text; "+
-				"raise models.generator.max_output_tokens or check the prompt", url)
+			"model: %s returned empty content after %d reasoning tokens: the model produced no "+
+				"answer%s", url, reasoning, budgetAdvice(reasoning, g.cfg.MaxOutputTokens))
 	}
 
 	usage := Usage{
@@ -110,14 +116,27 @@ func (g *openAIGenerator) Generate(ctx context.Context, prompt string) (string, 
 		CompletionTokens: resp.Usage.CompletionTokens,
 		TotalTokens:      resp.Usage.TotalTokens,
 		CacheHitTokens:   resp.Usage.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:  reasoning,
 	}
 	slog.Debug("model: generated",
 		"model", g.cfg.Model,
 		"prompt_tokens", usage.PromptTokens,
 		"completion_tokens", usage.CompletionTokens,
+		"reasoning_tokens", usage.ReasoningTokens,
 		"cache_hit_tokens", usage.CacheHitTokens)
 
 	return choice.Message.Content, usage, nil
+}
+
+// budgetAdvice names the likely fix, which depends on where the allowance went. A thinking
+// model that spent most of its budget reasoning cannot be fixed by a shorter prompt: the tokens
+// were gone before it began answering.
+func budgetAdvice(reasoningTokens, budget int) string {
+	if budget > 0 && reasoningTokens*2 >= budget {
+		return "; reasoning consumed the allowance — disable thinking through " +
+			"models.generator.request_options or raise models.generator.max_output_tokens"
+	}
+	return "; ask the prompt for a shorter answer or raise models.generator.max_output_tokens"
 }
 
 // Signature returns a stable identifier covering model, temperature, seed and limits.
@@ -135,6 +154,12 @@ func (g *openAIGenerator) buildSignature() string {
 		"model=" + g.cfg.Model,
 		"seed=" + strconv.Itoa(g.cfg.Seed),
 		"temperature=" + strconv.FormatFloat(g.cfg.Temperature, 'f', -1, 64),
+	}
+	if rendered := renderRequestOptions(g.cfg.RequestOptions); rendered != "" {
+		// Sorted into place rather than appended: the list is read as a stable rendering of
+		// every parameter that can change output, and request options are one of them.
+		parts = append(parts, "request_options="+rendered)
+		sort.Strings(parts)
 	}
 	return "openai:" + strings.Join(parts, ",")
 }

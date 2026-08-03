@@ -231,6 +231,28 @@ never order or parse them. Consequences:
 5. Treat an empty `fingerprint` as changed.
 6. Treat `metadata` as untrusted input. It originates from third-party systems and
    flows into LLM prompts; see the security section of `feature-design.md`.
+7. Consume every committed run newer than the last one fully consumed, oldest first — not
+   only the newest. See below.
+
+## The artifact backlog
+
+A consumer that reads only the newest committed run is correct for a single producer that
+enumerates the whole domain on a schedule, and lossy for many producers that each commit one
+item. Absence from a partial run means nothing, so the other producers' runs are not deleted;
+they are simply never read.
+
+So a consumer records a high-water mark per datatype — the newest artifact run it has finished
+consuming — and processes everything past it in run-ID order, which is chronological order.
+`inget` keeps that mark in `inget_state.consumed_artifacts`.
+
+The mark advances only behind a pass that finished cleanly: no failed item, not narrowed by
+`--only` or `--limit`, not interrupted. Any of those means the same run is read again next time,
+which costs one reconcile and lets the unfinished items retry. A consumer with no mark recorded
+processes the latest run only, so adopting the mark does not replay every retained run.
+
+Two consequences a producer should know. A run must be drained inside `retention.runs` or garbage
+collection removes it unconsumed. And a cost estimate over a backlog of several runs prices only
+the oldest, so it is a lower bound rather than the usual upper bound.
 
 ## Garbage collection
 

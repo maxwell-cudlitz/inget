@@ -27,10 +27,10 @@ type reconcileResult struct {
 	changed map[string]bool
 }
 
-// reconcile opens the latest artifact run and computes what changed against state.
-func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*reconcileResult, error) {
+// reconcile opens the given artifact run and computes what changed against state.
+func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, artifactRunID string) (*reconcileResult, error) {
 	cfg := deps.Config
-	run, err := arts.OpenRun(ctx, cfg.Source, cfg.Name, artifact.LatestRun)
+	run, err := arts.OpenRun(ctx, cfg.Source, cfg.Name, artifactRunID)
 	if err != nil {
 		return nil, fmt.Errorf("opening artifact run for %s: %w", cfg.Name, err)
 	}
@@ -103,6 +103,7 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 			Deferred:      deferred,
 			WorkItems:     workItems,
 			Tombstones:    tombstones,
+			Restricted:    partial,
 		},
 		tombstones: tombstones,
 		partial:    partial,

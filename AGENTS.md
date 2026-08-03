@@ -35,6 +35,10 @@ public repositories chosen with the GitHub search API, and the curl-plus-psql re
 asserts observable behaviour — JSON field names, key layouts, SQL — so a change to any of those
 should update it.
 
+`docs/self-submission.md` is the other worked example: `inget-fetch` running inside a repository's
+own CI, submitting to shared artifact storage for a consumer elsewhere to drain. Same status —
+observable behaviour, not a contract.
+
 ## Layout
 
 ```
@@ -56,7 +60,7 @@ internal/reindex/     re-embed stored view text under a new embedder, resumably 
 internal/model/       generator + embedder clients (OpenAI-compatible)   [implemented]
 internal/destination/ registry, pgvector                    [implemented]
 internal/ratelimit/   Limiter interface, header parsers, github limiter [implemented]
-internal/pipeline/    orchestration, worker pool, checkpointing, signals [implemented]
+internal/pipeline/    orchestration, artifact backlog drain, worker pool, checkpointing, signals [implemented]
 migrations/           goose SQL (state/{postgres,sqlite}/, destination/pgvector/), embedded
 prompts/              text/template prompt files per datatype
 deploy/               docker-compose [implemented], kubernetes/ CronJobs + reindex Job [implemented]
@@ -294,6 +298,70 @@ require touching the pipeline.
   the basename when a pattern has no `/`, so `LICENSE*` drops `docs/LICENSE.md` as well as
   the root file. That is intended; adding a pattern without a separator is a decision about
   every directory, not just the root.
+- **A failed view discards the item's successful ones (`internal/state/checkpoint.go`,
+  `internal/pipeline/views.go`).** An item's guards are written in one transaction, so failing on
+  the eighth view throws away the seven generations that succeeded and the retry pays for all
+  eight. The atomicity is correct — a stored view claims generation, embedding and upsert all
+  happened — but there is no level-2 equivalent of the derivation cache, so nothing survives the
+  failure. Cached derivations are what make a fragment-stage retry nearly free; a view-stage retry
+  is full price. If view failures become routine, the fix is a generation cache keyed by view name,
+  composed-input hash and enricher signature, not a weakening of the checkpoint.
+- **A list prompt needs a countable bound (`prompts/github/repo/aliases.tmpl`).** "At most 40
+  lines" was not kept: numbered input categories invited a headed, sectioned answer past the token
+  budget. State the output shape as a hard requirement with a line count, a per-line word count and
+  an explicit "nothing else". A view whose output shape is a list is the one most likely to
+  overrun, because prose prompts are bounded by paragraph counts the model does respect.
+- **A thinking model spends the output budget before it answers
+  (`internal/model/options.go`, `config.yaml`).** DeepSeek V4 enables thinking by default,
+  reasoning tokens come out of `max_tokens` and are billed at the output rate, and `temperature`,
+  `top_p` and `seed` have no effect while it is on. So a 1024-token budget was consumed by
+  reasoning before the answer began — every view failed with `finish_reason: "length"` — and the
+  determinism this pipeline's cache keys claim did not exist. `models.generator.request_options`
+  is the generic fix: an opaque map merged into the request body, so any provider parameter works
+  without new code. It feeds the generator signature, because a parameter that changes output must
+  invalidate what was cached under the previous value; keys the client sets itself (`model`,
+  `messages`, `temperature`, `seed`, `max_tokens`, `stream`) are refused at config load rather
+  than silently overriding a budget the truncation guards depend on. Note that viper lowercases
+  map keys, so a provider parameter spelled in camelCase cannot be expressed here.
+- **Diagnose a `length` failure by its reasoning tokens, not by the prompt
+  (`internal/model/generator.go`).** `completion_tokens_details.reasoning_tokens` is decoded for
+  exactly this: "the budget went on thinking" and "the answer was too long" are the same error
+  with different fixes, and the first cannot be fixed by shortening a prompt. The error message
+  names the split and recommends accordingly.
+- **A prompt that asks for more than `max_output_tokens` fails every large item
+  (`prompts/github/repo/*.tmpl`, `internal/model/generator.go`).** The shipped view prompts asked
+  for "3-6 paragraphs" of "clear, detailed description" against a 1024-token budget, so DeepSeek
+  hit the cap, returned `finish_reason: length`, and the generator failed the item — correctly, a
+  summary truncated mid-word must not become a vector. Every item died on `role`, its first view,
+  and never reached the other seven: 50 items, 2,657 derivations paid for, zero views stored. The
+  budget and the prompt are one setting in two files; when either moves, check the other. Prefer
+  shortening the prompt: `max_output_tokens` is in the fragment enricher's signature too, so
+  raising it invalidates every cached derivation, while a view prompt edit costs only that view.
+- **`compose.max_chars` must leave room for the prompt template
+  (`internal/config/validate_lists.go`).** It was equal to `models.generator.max_input_chars`, and
+  the generator rejects rather than truncates an oversized prompt, so an item that composed to the
+  cap failed on the template's own bytes — 120,000 of document became a 121,570-character prompt.
+  Validation now demands a margin of `min(8192, max_input_chars/8)`; the fraction is what keeps the
+  rule usable for a small local model. The default `compose.max_chars` is 100000 for the same
+  reason, a deviation from the 120000 in the design document recorded in `docs/progress.md`.
+- **The artifact high-water mark is what makes many producers safe
+  (`internal/pipeline/drain.go`, `internal/state/consumed.go`).** Reading only the newest
+  committed run loses every other submission when producers commit one run per item — a CI job
+  announcing its own repository — and loses it silently, because a partial run proves nothing
+  about the items it omits, so nothing is deleted and nothing complains. `inget_state.consumed_artifacts`
+  records how far a datatype has consumed and `inget run` drains the rest oldest first. The mark
+  advances only behind a pass with no failed item, not narrowed by `--only` or `--limit`, and not
+  interrupted; anything else means read this run again, which is one reconcile and a retry. Three
+  bounds: an unmarked datatype consumes the latest run only, so adopting the mark does not replay
+  a month of retained runs; the upsert is guarded so the mark cannot rewind and replay paid work;
+  and an undrained backlog older than `retention.runs` is collected by gc, so the drain has to
+  keep up with retention.
+- **A plan over a backlog is a lower bound, not an upper bound
+  (`internal/pipeline/run.go`).** Every other estimate in this codebase is deliberately
+  conservative, but a drain processes every pending run while the estimate prices only the oldest.
+  `Plan.PendingArtifactRuns` is what says so, and a backlog greater than one logs a warning. Do
+  not "fix" this by summing an estimate per pending run: state does not advance during a plan, so
+  an item appearing in several runs would be priced several times.
 - **A path cannot tell you a file is a heap dump (`internal/source/github/content.go`).**
   `keepPath` runs against the tree before anything is transferred, which is what makes it cheap,
   and it is blind to `java_pid26365.hprof`, `lighthouse-bundle.js` and `strings/words.txt` — 40%

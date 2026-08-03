@@ -35,7 +35,7 @@ models:
     temperature: 0
     seed: 1
     max_output_tokens: 512
-    max_input_chars: 1000
+    max_input_chars: 120000
     concurrency: 2
     timeout: 60s
   embedder:

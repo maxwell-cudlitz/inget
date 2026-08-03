@@ -320,7 +320,7 @@ datatypes:
 
 `prompt` is still required by validation — `views[].prompt` is unconditional — and still
 ignored by the passthrough enricher. `max_chars: 8000` is the part that matters: passthrough
-embeds the composed document verbatim, and the shipped 120000 characters is roughly 30k
+embeds the composed document verbatim, and the shipped 100000 characters is roughly 25k
 tokens, at or past what this model accepts in one input. `INGET_GENERATOR_API_KEY` must still
 be non-empty, because the client is constructed either way, but nothing calls it. Use this to
 check wiring, never to judge quality: eval's distinctiveness metrics over passthrough text say

@@ -65,6 +65,10 @@ type cascadeHarness struct {
 	// metadata is merged into every record the harness writes, which is how a reference test
 	// gives an item something for key_from to find.
 	metadata map[string]string
+	// scope is the artifact scope the harness commits with. Empty means full; a test of the
+	// self-submission topology sets partial, because a producer that carries one item must
+	// not claim the absence of the others means anything.
+	scope artifact.Scope
 }
 
 // newCascadeHarness builds the harness. State is sqlite in a temp dir and artifacts are
@@ -159,6 +163,12 @@ func (h *cascadeHarness) runInterrupted() (*Plan, *Stats, error) {
 	return Run(WithShutdown(h.ctx, ch), h.deps, h.arts, h.runConfig())
 }
 
+// runWith executes the pipeline with a caller-modified RunConfig, for the flags the standard
+// one does not set.
+func (h *cascadeHarness) runWith(rc RunConfig) (*Plan, *Stats, error) {
+	return Run(h.ctx, h.deps, h.arts, rc)
+}
+
 // reset zeroes every counter between phases.
 func (h *cascadeHarness) reset() {
 	h.gen.reset()
@@ -176,10 +186,14 @@ func (h *cascadeHarness) writeRun(version string, changedIdx int, changedVersion
 // writeRunWithItems commits an artifact run holding one record per item ID.
 func (h *cascadeHarness) writeRunWithItems(version string, changedIdx int, changedVersion string, itemIDs ...string) {
 	h.t.Helper()
+	scope := h.scope
+	if scope == "" {
+		scope = artifact.ScopeFull
+	}
 	w, err := h.arts.NewWriter(h.ctx, artifact.RunInfo{
 		Source:     testSource,
 		Datatype:   testDatatype,
-		Scope:      artifact.ScopeFull,
+		Scope:      scope,
 		Producer:   "test",
 		DomainHash: "sha256:domain",
 		ConfigHash: "sha256:config",

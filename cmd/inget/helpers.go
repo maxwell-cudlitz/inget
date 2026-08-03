@@ -107,6 +107,7 @@ func buildGenerator(cfg *config.Config) (model.Generator, error) {
 		MaxOutputTokens: mc.MaxOutputTokens,
 		MaxInputChars:   mc.MaxInputChars,
 		Timeout:         mc.Timeout.Duration(),
+		RequestOptions:  mc.RequestOptions,
 	}), nil
 }
 
@@ -162,6 +163,8 @@ func reportPlan(plan *pipeline.Plan) error {
 		"deferred", plan.Deferred,
 		"work_items", len(plan.WorkItems),
 		"tombstones", len(plan.Tombstones),
+		"pending_artifact_runs", plan.PendingArtifactRuns,
+		"restricted", plan.Restricted,
 		"fragment_derivations", est.FragmentDerivations,
 		"view_generations", est.ViewGenerations,
 		"input_tokens", est.InputTokens,
