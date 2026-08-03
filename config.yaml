@@ -59,7 +59,7 @@ models:
     api_key_env: INGET_GENERATOR_API_KEY
     temperature: 0
     seed: 1
-    max_output_tokens: 1024
+    max_output_tokens: 4096
     # The input bound is a guard against a prompt this client should not send, not a tuning
     # knob for quality: it is deliberately far above compose.max_chars so that the composed
     # document, not the transport, decides how much a view reads. V4's context is a million
