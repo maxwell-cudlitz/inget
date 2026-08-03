@@ -94,6 +94,7 @@ func keepCandidates(entries []treeEntry) map[string]treeEntry {
 // exclusions accumulates the per-file outcomes worth reporting.
 type exclusions struct {
 	secrets  []string // "path (rule,rule)"
+	machine  []string // "path (reason)": content shape said no reader would read it
 	withheld []string // paths present in the tree but with no content in the archive
 }
 
@@ -104,6 +105,10 @@ func (e exclusions) warnings(itemID string) []string {
 	if len(e.secrets) > 0 {
 		out = append(out, fmt.Sprintf("%s: excluded %d file(s) with detected secrets: %s",
 			itemID, len(e.secrets), summarize(e.secrets)))
+	}
+	if len(e.machine) > 0 {
+		out = append(out, fmt.Sprintf("%s: excluded %d machine-generated file(s): %s",
+			itemID, len(e.machine), summarize(e.machine)))
 	}
 	if len(e.withheld) > 0 {
 		out = append(out, fmt.Sprintf("%s: %d file(s) recorded without content: %s",
@@ -118,6 +123,19 @@ func summarize(entries []string) string {
 		return strings.Join(entries, ", ")
 	}
 	return fmt.Sprintf("%s and %d more", strings.Join(entries[:warnedPathLimit], ", "), len(entries)-warnedPathLimit)
+}
+
+// recorded builds a fragment that is listed but carries no content: the item still says the file
+// exists and why it was excluded, and no blob is written and no derivation is paid for.
+func recorded(path, sha string, bytes int64, tier int, meta map[string]string) source.Fragment {
+	return source.Fragment{
+		Key:         path,
+		Fingerprint: sha,
+		Bytes:       bytes,
+		Tier:        tier,
+		MIME:        mimeType(path),
+		Meta:        meta,
+	}
 }
 
 // fragments builds the fragment list from the surviving paths and the extracted archive.
@@ -149,19 +167,22 @@ func (c *Connector) fragments(candidates map[string]treeEntry, arch archive) ([]
 		}
 		if rules := c.scanner.rules(content); len(rules) > 0 {
 			notes.secrets = append(notes.secrets, fmt.Sprintf("%s (%s)", path, strings.Join(rules, ",")))
-			out = append(out, source.Fragment{
-				Key:         path,
-				Fingerprint: entry.SHA,
-				Bytes:       int64(len(content)),
-				Tier:        tier,
-				MIME:        mimeType(path),
-				Meta:        map[string]string{"excluded": "secret", "rules": strings.Join(rules, ",")},
-			})
+			out = append(out, recorded(path, entry.SHA, int64(len(content)), tier,
+				map[string]string{"excluded": "secret", "rules": strings.Join(rules, ",")}))
+			continue
+		}
+		// Shape, after content is in hand and before the file is split: a dump or a dataset
+		// is one decision here and sixteen derivations if it gets past.
+		if reason := exclusionReason(path, content); reason != "" {
+			notes.machine = append(notes.machine, fmt.Sprintf("%s (%s)", path, reason))
+			out = append(out, recorded(path, entry.SHA, int64(len(content)), tier,
+				map[string]string{"excluded": reason}))
 			continue
 		}
 		out = append(out, fileFragments(path, entry.SHA, content, tier, c.fragmentMaxBytes)...)
 	}
 	sort.Strings(notes.secrets)
+	sort.Strings(notes.machine)
 	sort.Strings(notes.withheld)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Tier != out[j].Tier {

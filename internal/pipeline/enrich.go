@@ -60,6 +60,11 @@ func deriveFragment(ctx context.Context, ex *execution, itemID string, frag arti
 	if !ex.fragmentEnrichment() {
 		return loadFragmentContent(ctx, ex.arts, frag)
 	}
+	if frag.Blob == "" {
+		// Nothing was stored for it: a detected secret, a file over the split budget, or an
+		// empty file. Deriving it would pay for a prompt whose data section is blank.
+		return "", nil
+	}
 
 	cacheKey := delta.FragmentCacheKey(frag.Key, frag.Fingerprint, ex.fragSig)
 	cached, found, err := ex.deps.State.Derivation(ctx, cacheKey)

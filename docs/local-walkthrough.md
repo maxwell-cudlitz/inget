@@ -38,26 +38,60 @@ docker compose -f deploy/docker-compose.yaml ps
 
 Two services: `postgres` (pgvector 0.8+, holding both the `inget_state` schema and the vector
 table) on `127.0.0.1:5432`, and `embedder` (Text Embeddings Inference serving
-Qwen3-Embedding-0.6B) on `127.0.0.1:8080`. The first start downloads about 1.2 GB of weights;
-wait for health before continuing:
+Qwen3-Embedding-0.6B) on `127.0.0.1:8080`.
+
+The first start takes a couple of minutes and looks alarming while it works. Measured on an
+11-core arm64 machine: about 70 seconds to download 1.2 GB of weights, then about 60 seconds of
+warmup. TEI does not open its HTTP port until warmup finishes, so `curl` gets
+connection-refused rather than a 503 the whole time, and the compose health check reads
+`starting`. Two log lines look like failures and are not: `Could not download onnx/model.onnx`
+(404) and `Could not start ORT backend` are TEI probing for an ONNX export this model does not
+publish, after which it falls back to Candle — `Starting Qwen3 model on Cpu` is the line that
+says it worked.
 
 ```bash
+docker compose -f deploy/docker-compose.yaml logs -f embedder     # watch for "Ready"
 curl -fsS http://localhost:8080/health && echo ok
 curl -fsS http://localhost:8080/info | jq .        # the model it loaded and its input limit
 ```
 
-On Apple Silicon, prefer the native build over that container: TEI has no Metal or MPS access
-inside Docker and embeds on CPU cores only.
+If the container exits with code 137 instead, it was killed for memory during warmup: give
+Docker more RAM or lower `--max-batch-tokens` in the compose file, which is what bounds the
+batch warmup allocates.
+
+On Apple Silicon, prefer the native build over that container: your log will say
+`Starting Qwen3 model on Metal(MetalDevice(...))` instead of `on Cpu`, because TEI has no Metal
+or MPS access inside Docker. The router runs in the foreground and never returns, so give it a
+terminal of its own:
 
 ```bash
 brew install text-embeddings-inference
-text-embeddings-router --model-id Qwen/Qwen3-Embedding-0.6B --port 8090 --hostname 127.0.0.1
-docker compose -f deploy/docker-compose.yaml up -d postgres      # then only postgres is needed
-export INGET_MODELS__EMBEDDER__BASE_URL=http://127.0.0.1:8090/v1
+text-embeddings-router --model-id Qwen/Qwen3-Embedding-0.6B --port 8090 --hostname 127.0.0.1 \
+  --max-batch-tokens 4096 --max-client-batch-size 64
 ```
 
-If something already holds port 8080, set `TEI_HOST_PORT` and point the embedder's base URL at
-the new port the same way.
+Then, back in your working shell:
+
+```bash
+docker compose -f deploy/docker-compose.yaml up -d postgres      # then only postgres is needed
+export INGET_MODELS__EMBEDDER__BASE_URL=http://127.0.0.1:8090/v1
+until curl -fsS http://127.0.0.1:8090/health >/dev/null 2>&1; do sleep 5; done; echo ready
+```
+
+Neither flag on that router is tuning. `--max-client-batch-size` defaults to 32 while
+`config.yaml` sets `models.embedder.batch_size: 64`, so a request carrying a full batch comes
+back `422 {"message":"batch size 64 > maximum allowed batch size 32"}`. That failure arrives
+late and looks unrelated: `inget run` on `github/repo` sends one call per item — eight views,
+comfortably under 32 — while `inget eval` (sample × views, split into 64-text requests) and
+`inget reindex` (eight items × eight views in one call) are the commands that trip it. Raise the
+server's limit as above, or lower the client's with
+`INGET_MODELS__EMBEDDER__BATCH_SIZE=32`. `--max-batch-tokens` is the warmup cost: measured on
+this model, the default 16384 takes about three minutes to warm up, 4096 about one.
+
+Whichever you run, the embedder's `base_url` has to name it. `config.local.yaml` in this
+repository points at `127.0.0.1:8090`, so using the container instead means overriding with
+`INGET_MODELS__EMBEDDER__BASE_URL=http://localhost:8080/v1`. If something already holds port
+8080, set `TEI_HOST_PORT` and point the base URL at the new port the same way.
 
 ## 2. Environment
 

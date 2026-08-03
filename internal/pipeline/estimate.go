@@ -4,8 +4,12 @@
 // bounds. An exact count is not obtainable without doing the work: the level-2 guard
 // compares a hash of the composed derivations, and the derivations are what the estimate is
 // trying to price. So every view whose scope changed is counted as a generation even though
-// some of them will turn out to compose to an unchanged document, and the token counts use
-// raw fragment sizes because derived sizes are not known yet.
+// some of them will turn out to compose to an unchanged document, every call is priced at the
+// full output budget rather than the shorter completion it will probably return, and a view's
+// input is the raw size of the fragments in its scope even though what it composes is their
+// shorter derived text. Input is bounded by the same truncation the run applies —
+// fragment_enricher.max_input_chars per fragment, compose.max_chars per view — because pricing
+// characters no call sends is not conservatism, it is a wrong number.
 package pipeline
 
 import (
@@ -65,8 +69,10 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 	est.UpperBound = true
 
 	var fragSig string
+	fragMaxChars := 0
 	if cfg.FragmentEnricher && deps.FragEnricher != nil {
 		fragSig = deps.FragEnricher.Signature()
+		fragMaxChars = deps.FragEnricher.MaxInputChars()
 	}
 
 	for _, itemID := range result.plan.WorkItems {
@@ -74,7 +80,7 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 		if !ok {
 			continue
 		}
-		if err := estimateItem(ctx, deps, rc, rec, fragSig, &est); err != nil {
+		if err := estimateItem(ctx, deps, rc, rec, fragEstimate{sig: fragSig, maxChars: fragMaxChars}, &est); err != nil {
 			return err
 		}
 	}
@@ -85,8 +91,16 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 	return nil
 }
 
+// fragEstimate is what pricing a fragment needs to know about the fragment enricher: its
+// signature, which decides cache hits, and its input bound, which decides tokens. A zero
+// signature means fragment enrichment is off and no fragment is derived.
+type fragEstimate struct {
+	sig      string
+	maxChars int
+}
+
 // estimateItem adds one item's derivations and view generations to est.
-func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Record, fragSig string, est *Estimate) error {
+func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Record, frags fragEstimate, est *Estimate) error {
 	cfg := deps.Config
 
 	cached, err := deps.State.Fragments(ctx, cfg.Name, rec.ItemID)
@@ -96,10 +110,15 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 	changed := changedKeys(delta.Reconcile(fingerprints(cached), incoming(rec)))
 
 	for _, frag := range rec.Fragments {
-		if fragSig == "" {
+		if frags.sig == "" {
 			break // no fragment enrichment: raw content is composed, nothing is generated
 		}
-		key := delta.FragmentCacheKey(frag.Key, frag.Fingerprint, fragSig)
+		if frag.Blob == "" {
+			// Withheld or empty content — a detected secret, a file over the split budget.
+			// There is nothing to send, so the pipeline makes no call for it.
+			continue
+		}
+		key := delta.FragmentCacheKey(frag.Key, frag.Fingerprint, frags.sig)
 		hit, err := deps.State.HasDerivation(ctx, key)
 		if err != nil {
 			return fmt.Errorf("checking derivation cache for %s/%s: %w", cfg.Name, frag.Key, err)
@@ -108,7 +127,7 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 			continue
 		}
 		est.FragmentDerivations++
-		est.InputTokens += tokensForChars(int(frag.Bytes))
+		est.InputTokens += tokensForChars(boundChars(int(frag.Bytes), frags.maxChars))
 		est.OutputTokens += rc.Pricing.MaxOutputTokens
 	}
 
@@ -120,21 +139,31 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 		if scoped == 0 {
 			continue
 		}
-		if cfg.ComposeMaxChars > 0 {
-			scoped = min(scoped, cfg.ComposeMaxChars)
-		}
 		est.ViewGenerations++
-		est.InputTokens += tokensForChars(scoped)
+		est.InputTokens += tokensForChars(boundChars(scoped, cfg.ComposeMaxChars))
 		est.OutputTokens += rc.Pricing.MaxOutputTokens
 	}
 	return nil
 }
 
+// boundChars applies a character bound, where a bound of zero or less means unbounded. Both
+// stages truncate their input, so pricing the untruncated size would quote tokens no call sends.
+func boundChars(chars, max int) int {
+	if max <= 0 {
+		return chars
+	}
+	return min(chars, max)
+}
+
 // scopedBytes sums the sizes of the fragments a view depends on. An empty dependsOn depends
-// on the whole item.
+// on the whole item. Fragments with no stored content are skipped: composition drops them, so
+// they are not part of any prompt.
 func scopedBytes(rec *artifact.Record, dependsOn []string) int {
 	total := 0
 	for _, frag := range rec.Fragments {
+		if frag.Blob == "" {
+			continue
+		}
 		if len(dependsOn) == 0 || delta.MatchesAny(frag.Key, dependsOn) {
 			total += int(frag.Bytes)
 		}

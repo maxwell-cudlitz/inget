@@ -91,7 +91,18 @@ inget query "which repos handle terraform"
 and the estimated cost before spending anything. `plan` reads only — it opens no
 destination, takes no lock and calls no model — and reports the fragment derivations, view
 generations, estimated tokens and cost a run would spend, plus any prompt or model change
-that has invalidated cached work. Its estimates are upper bounds.
+that has invalidated cached work. Its estimates are upper bounds: every call is priced at the
+full output budget, though input is priced at what will actually be sent, since both stages
+truncate before they call.
+
+Cost is dominated by fragment derivation — one call per file — so two settings decide what a run
+costs. `fragment_enricher.max_input_chars` bounds each file: content over it is truncated, not
+rejected, because a summary of the first 8,000 characters says what a file is and the rest buys a
+summary of the same length. The connector's noise filter decides which files exist at all: it
+drops dependencies, generated output, lockfiles and fixtures by path, and then drops binaries,
+bundles and bulk data by content shape, which is what catches a heap dump or a wordlist wearing
+an ordinary filename. Excluded files stay listed in the artifact with the reason, so nothing
+disappears silently.
 
 For a worked version of the above against real data — 50 popular but reasonably sized public
 repositories, chosen with the GitHub search API, then queried both through `inget query` and

@@ -10,6 +10,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/maxwell-cudlitz/inget/internal/model"
@@ -87,6 +88,80 @@ func TestFragmentEnricherCallsGenerator(t *testing.T) {
 	}
 	if got == "" {
 		t.Error("expected non-empty output")
+	}
+}
+
+// recordingGenerator captures the prompt it was given, which is how a test sees what the
+// enricher decided to send.
+type recordingGenerator struct {
+	prompt string
+}
+
+func (g *recordingGenerator) Generate(_ context.Context, prompt string) (string, model.Usage, error) {
+	g.prompt = prompt
+	return "a summary", model.Usage{}, nil
+}
+
+func (g *recordingGenerator) Signature() string { return "recording" }
+
+func TestFragmentEnricherTruncatesOversizedContent(t *testing.T) {
+	gen := &recordingGenerator{}
+	prompt, err := ParsePrompt("frag", []byte("Summarise {{.Key}}: {{.Content}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fe := NewFragmentLLMEnricher(gen, prompt, FragmentEnricherConfig{MaxInputChars: 100})
+	body := strings.Repeat("x", 5000)
+	if _, err := fe.Enrich(context.Background(), FragmentTemplateData{Content: body, Key: "big.txt"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(gen.prompt, body) {
+		t.Error("the whole file reached the generator; max_input_chars did not bound it")
+	}
+	if !strings.Contains(gen.prompt, truncationNotice) {
+		t.Error("truncated content should carry the truncation notice")
+	}
+	// The bound is on content, so the rendered prompt is the bound plus the template around it.
+	if len(gen.prompt) > 100+len(truncationNotice)+len("Summarise big.txt: ") {
+		t.Errorf("prompt is %d characters, longer than the bounded content plus the template", len(gen.prompt))
+	}
+}
+
+func TestTruncateChars(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		cut  bool
+		want string // the retained head, before the notice
+	}{
+		{"under the bound", "hello", 10, false, "hello"},
+		{"at the bound", "hello", 5, false, "hello"},
+		{"no bound", "hello", 0, false, "hello"},
+		// The cut prefers a line boundary once past the halfway point, so the tail is a whole
+		// line rather than a split token.
+		{"cuts at a line boundary", "aaaa\nbbbb\ncccc", 12, true, "aaaa\nbbbb"},
+		// A boundary too early would throw away most of the budget, so the raw cut wins.
+		{"ignores an early boundary", "a\n" + strings.Repeat("b", 20), 12, true, "a\nbbbbbbbbbb"},
+		// Multi-byte runes are counted as runes and never split.
+		{"counts runes", "日本語です", 3, true, "日本語"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, cut := truncateChars(tt.in, tt.max)
+			if cut != tt.cut {
+				t.Fatalf("truncateChars() cut = %v, want %v", cut, tt.cut)
+			}
+			want := tt.want
+			if tt.cut {
+				want += truncationNotice
+			}
+			if got != want {
+				t.Errorf("truncateChars() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

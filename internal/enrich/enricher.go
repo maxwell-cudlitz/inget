@@ -55,6 +55,37 @@ type FragmentTemplateData struct {
 	Key     string
 }
 
+// truncationNotice is appended to truncated content so that a model reading a piece that ends
+// mid-declaration knows the file continued, and does not describe the remainder as absent.
+const truncationNotice = "\n\n[content truncated: the file continues beyond this point]"
+
+// truncateChars cuts s to at most max characters, preferring the last line boundary, and reports
+// whether it cut. max <= 0 disables the bound.
+//
+// The cut is by rune, not byte, so it cannot split a multi-byte character and produce invalid
+// UTF-8 in a prompt. Preferring a line boundary keeps the tail readable: a summary of code that
+// ends mid-token is a summary of a syntax error.
+func truncateChars(s string, max int) (string, bool) {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s, false
+	}
+	cut := len(s)
+	for i, count := 0, 0; i < len(s); {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if count == max {
+			cut = i
+			break
+		}
+		i += size
+		count++
+	}
+	head := s[:cut]
+	if newline := strings.LastIndexByte(head, '\n'); newline > len(head)/2 {
+		head = head[:newline]
+	}
+	return head + truncationNotice, true
+}
+
 // validateOutput checks generated text for shape and length before it is stored, and
 // returns it trimmed.
 //

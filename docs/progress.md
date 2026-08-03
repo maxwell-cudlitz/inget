@@ -1225,6 +1225,59 @@ container holds 8080 on this machine.
 > the whole `up`, so a wrong tag leaves postgres down too, which reads like a broken compose
 > file rather than a bad tag.
 
+### The compose embedder needed two flags to work at all (2026-08-02)
+
+Running that arm64 image surfaced two defects in `deploy/docker-compose.yaml`, both dating from
+step 6 and neither reachable until the container actually ran on this architecture.
+
+**Warmup was OOM-killed.** The container reached `Warming up model` and died six seconds later:
+`exit=137 oom=true`, with the HTTP port never opening, so it presented as a hang — `docker
+compose ps` showed `health: starting` and `curl` got connection-refused rather than a 503. The
+cause is `--max-batch-tokens`, which defaults to 16384 on CPU and bounds the batch warmup
+allocates; a 16384-token forward pass of Qwen3-Embedding-0.6B exceeded a 7.75 GB Docker VM that
+also held postgres. Set to 4096: warmup now completes in about 58 seconds after roughly 70
+seconds of weight download, and 4096 is still far above anything inget sends, since generated
+view text is bounded by `models.generator.max_output_tokens` and passthrough text by
+`compose.max_chars`.
+
+**Every full batch would have been rejected.** `--max-client-batch-size` caps the inputs one
+request may carry and defaults to 32, while `config.yaml` sets `models.embedder.batch_size: 64`.
+Set to 64 in compose, and confirmed both directions against a live router: 64 inputs to a
+default-configured native TEI returns
+`422 {"message":"batch size 64 > maximum allowed batch size 32","type":"Validation"}`, 32 inputs
+succeed, and 64 inputs to the reconfigured container return 64 vectors.
+
+Which commands that breaks is worth writing down, because the failure arrives late and looks
+unrelated to batching. `inget run` on `github/repo` calls `Embed` once per item with that item's
+pending views — eight, under the limit. `inget reindex` claims `DefaultBatchSize` 8 items and
+embeds their views in one call: 64. `inget eval` embeds the whole sample, which the client splits
+into requests of `models.embedder.batch_size`: 64 again. So a run can succeed for hours and eval
+or reindex still fail on the first call. `internal/model/retry.go` does not retry a 4xx other
+than 429, so it fails loudly rather than corrupting anything.
+
+The same two flags are needed on the native Homebrew router, whose defaults are identical — its
+startup `Args` line prints `max_batch_tokens: 16384, max_client_batch_size: 32`. Both the
+compose comment and the walkthrough now show them.
+
+Measured warmup, same model on the same machine: about three minutes at the default 16384 batch
+tokens, about one minute at 4096, on either backend. The native router does get Metal
+(`Starting Qwen3 model on Metal(MetalDevice(DeviceId(1)))`) where the container reports
+`on Cpu`, which confirms the standing advice to prefer the Homebrew build on Apple Silicon.
+
+Verified through the container afterwards: a single input returns 1024 dimensions at unit norm,
+reported model `Qwen/Qwen3-Embedding-0.6B`, which is the width `config.yaml` pins and
+`halfvec(1024)` in the destination expects.
+
+Two log lines in that startup look like failures and are not: `Could not download
+onnx/model.onnx` (404) and `Could not start ORT backend`. TEI's CPU image probes for an ONNX
+export, this model publishes none, and it falls back to Candle — `Starting Qwen3 model on Cpu`
+is the line that says it worked. The walkthrough says so, because the ERROR level does not.
+
+Related and unaddressed: TEI logs `--auto-truncate` defaults to true, so an input over the
+batch-token bound is silently shortened rather than refused. Nothing the shipped configuration
+sends comes near 4096 tokens, but a passthrough datatype with a large `compose.max_chars` could,
+and the failure mode would be an index quietly built from truncated text.
+
 **Generator — DeepSeek V4 Flash, working.** `temperature: 0`, `seed` and
 `max_output_tokens: 1024` are all accepted; a two-sentence answer finished with
 `finish_reason: stop` at 73–109 completion tokens, of which 25 were reasoning tokens.

@@ -129,7 +129,10 @@ datatypes:
     fragment_enricher:
       enabled: true
       prompt: prompts/github/repo/fragment.tmpl
-      max_input_chars: 8000
+      max_input_chars: 8000            # per-file bound; content over it is truncated, not
+                                       # rejected. The main cost control: derivation is one
+                                       # call per file, so an unbounded file is an unbounded
+                                       # bill.
     compose:
       order: tier                      # tier | path
       max_chars: 120000

@@ -294,6 +294,28 @@ require touching the pipeline.
   the basename when a pattern has no `/`, so `LICENSE*` drops `docs/LICENSE.md` as well as
   the root file. That is intended; adding a pattern without a separator is a decision about
   every directory, not just the root.
+- **A path cannot tell you a file is a heap dump (`internal/source/github/content.go`).**
+  `keepPath` runs against the tree before anything is transferred, which is what makes it cheap,
+  and it is blind to `java_pid26365.hprof`, `lighthouse-bundle.js` and `strings/words.txt` — 40%
+  of one 50-repository corpus, each file costing a derivation to summarise as "a list of words".
+  So a second filter judges shape once the bytes are in hand: non-text content at any size, and
+  above 256 KB a longest line over 5,000 bytes (minified or bundled), a mean line under 16 bytes
+  (a wordlist, an export), or a bulk extension (`.json`, `.txt`, `.xml`, `.yaml`, `.sql`), where
+  large size means records rather than a large document. The mean-line bound is low because real
+  code averages lower than it looks: a 275 KB hand-written Rust file in the sample corpus averages
+  34 bytes a line, and a bound near 40 dropped it. It runs on the whole file before splitting, so
+  one dump is one decision rather than sixteen. Thresholds are loose on purpose: a false negative
+  costs one summary, a false positive silently drops something a person wrote. Excluded files stay
+  listed with `meta.excluded` and their fingerprint, so the exclusion is visible in the manifest
+  and the next change is still detectable. Measured on the 50-repository sample: 119.5 MB of
+  fragment content down to 88.3 MB, with no source file among the exclusions.
+- **`fragment_enricher.max_input_chars` truncates, and it is the pipeline's main cost control
+  (`internal/enrich/fragment.go`).** It fed only the enricher signature until derivation was
+  metered: a 1 MB file was sent whole, and `models.generator.max_input_chars` then *rejected* the
+  prompt, so the run failed instead of costing money. Both halves were wrong. A summary of the
+  first 8,000 characters describes what a file is, and the rest buys a summary of the same
+  length. Because the behaviour changed, the fragment enricher's schema version is 2: derivations
+  cached under version 1 came from untruncated content.
 - **Secret findings are fully redacted (`internal/source/github/secrets.go`).** The detector
   is built with `Redact = 100`, so a finding carries no plaintext. Lowering it would put
   live credentials into memory that log lines and warnings could reach. Rule IDs are what
@@ -513,7 +535,12 @@ require touching the pipeline.
   point, and wasteful ahead of a run that is about to look the same keys up anyway, so only
   dry-run mode calls `estimateWork`. Signature changes are surfaced on both paths, at one
   query per view. Estimates are upper bounds: the level-2 guard can still skip a view whose
-  scoped composition turns out unchanged, and that cannot be known without deriving.
+  scoped composition turns out unchanged, and that cannot be known without deriving, and every
+  call is priced at the full output budget rather than the shorter completion it will return.
+  An upper bound is not a licence to price work the run will not perform, so input is bounded by
+  the same truncation the run applies — `fragment_enricher.max_input_chars` per fragment,
+  `compose.max_chars` per view — and a fragment with no stored blob costs nothing, because
+  nothing is sent for it and composition drops it.
 - **`inget reindex` re-embeds and never regenerates (`internal/reindex/`).** The text in
   `state.views.text` is by definition what each stored vector was made from, so an embedder
   change needs no generator, no artifacts and no tokens. A *prompt* change is the other

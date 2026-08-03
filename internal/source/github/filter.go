@@ -8,6 +8,10 @@
 // already the matcher config validation and view scoping use, so a glob means the same thing in
 // all three places.
 //
+// Paths are all this file looks at, which is why it can run against the tree before anything is
+// transferred. Noise wearing an ordinary name — a heap dump, a wordlist, a bundle — is caught by
+// content.go once the bytes are in hand.
+//
 // Tiers are the envelope's composition order: docs first, because a repository's own description
 // of itself is the most information per token, then entrypoints, then declarations, then
 // implementation. The first matching group wins, so the lists are ordered by specificity.
@@ -24,8 +28,9 @@ import (
 )
 
 // skipPatterns drop paths that cost tokens and carry no signal about what a repository does.
-// Five groups: content that is not text, code this repository did not write, generated output,
-// tests and fixtures, and files whose only content is a version number.
+// Groups, in order: content that is not text, execution dumps, bulk data and model weights,
+// code this repository did not write, generated output, tests and fixtures, lockfiles, and
+// files whose only content is boilerplate.
 var skipPatterns = []string{
 	// Binary, media and archive content.
 	"**/*.{png,jpg,jpeg,gif,bmp,ico,svg,webp,tiff,psd,ai}",
@@ -36,15 +41,31 @@ var skipPatterns = []string{
 	"**/*.{so,dylib,dll,exe,a,o,obj,class,pyc,pyo,wasm,bin,dat,db,sqlite,sqlite3}",
 	"**/*.{pem,key,crt,cer,pfx,p12,keystore,jks}",
 
+	// Dumps and profiles: a heap dump or a trace is a snapshot of one execution, not a
+	// description of the program, and they run to hundreds of megabytes.
+	"**/*.{hprof,heapsnapshot,heapprofile,cpuprofile,prof,pprof,core,dmp,dump,trace}",
+	"**/*.{log,logs}", "**/logs/**", "**/*.pcap", "**/*.pcapng",
+
+	// Datasets and serialized models: bulk records and weights. The code that reads them is
+	// what says what they mean, and that code is kept.
+	"**/*.{csv,tsv,parquet,avro,orc,arrow,feather,ndjson,jsonl}",
+	"**/*.{npy,npz,pkl,pickle,joblib,h5,hdf5,pt,pth,ckpt,onnx,safetensors,gguf,ggml,tflite,pb}",
+	"**/*.{mmdb,mo,po,pot,ics,vcf,bak}",
+	// No directory pattern for "data/**" and friends: Go, Python and Rust all have packages
+	// named data, so the directory name alone does not mean bulk records. Content shape
+	// (content.go) is what catches a dataset whose extension and path look ordinary.
+
 	// Dependencies and build output: code this repository did not write.
 	"**/node_modules/**", "**/vendor/**", "**/.git/**", "**/.svn/**",
+	"**/third_party/**", "**/thirdparty/**", "**/third-party/**", "**/external/**",
 	"**/dist/**", "**/build/**", "**/target/**", "**/out/**", "**/bin/**", "**/obj/**",
 	"**/.venv/**", "**/venv/**", "**/site-packages/**", "**/__pycache__/**",
 	"**/.next/**", "**/.nuxt/**", "**/.terraform/**", "**/.gradle/**", "**/.idea/**",
 	"**/.mypy_cache/**", "**/.pytest_cache/**", "**/.ruff_cache/**", "**/coverage/**",
 
 	// Generated and minified output.
-	"**/*.min.{js,css}", "**/*.map", "**/*.pb.go", "**/*.pb.gw.go",
+	"**/*.min.*", "**/*.map", "**/*.pb.go", "**/*.pb.gw.go",
+	"**/*bundle.{js,mjs,cjs,css}", "**/*.bundle.*", "**/*-lock.{json,yaml,yml}",
 	"**/*_generated.go", "**/*.generated.*", "**/*_pb2.py", "**/*_pb2_grpc.py",
 	"**/zz_generated*", "**/*.g.dart", "**/*.freezed.dart",
 

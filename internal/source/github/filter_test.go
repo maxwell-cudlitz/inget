@@ -46,7 +46,10 @@ func TestKeepPath(t *testing.T) {
 		// Dropped: generated output.
 		{"api/service.pb.go", false},
 		{"web/app.min.js", false},
+		{"web/app.min.css", false},
 		{"web/app.js.map", false},
+		{"src/third_party/lighthouse-bundle.js", false},
+		{"web/vendor.bundle.js", false},
 		{"apis/zz_generated.deepcopy.go", false},
 
 		// Dropped: tests and fixtures.
@@ -55,6 +58,17 @@ func TestKeepPath(t *testing.T) {
 		{"tests/e2e/login.py", false},
 		{"web/src/App.test.tsx", false},
 		{"pkg/mocks/client.go", false},
+
+		// Dropped: execution dumps, datasets and serialized models, which are records of a
+		// run or a corpus rather than a description of the program.
+		{"java_pid26365.hprof", false},
+		{"profiles/cpu.pprof", false},
+		{"logs/server.log", false},
+		{"benchmarks/results.csv", false},
+		{"models/encoder.safetensors", false},
+		{"traces/capture.pcap", false},
+		// A package named data is still source: only shape, not the directory name, drops it.
+		{"internal/data/loader.go", true},
 
 		// Dropped: lockfiles and boilerplate.
 		{"package-lock.json", false},
