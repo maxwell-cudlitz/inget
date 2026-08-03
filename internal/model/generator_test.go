@@ -184,7 +184,6 @@ func TestGeneratorSignatureStability(t *testing.T) {
 		{"model", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.Model = "kimi-k3"; return c }},
 		{"temperature", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.Temperature = 0.7; return c }},
 		{"max_output_tokens", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.MaxOutputTokens = 2048; return c }},
-		{"max_input_chars", func(c OpenAIGeneratorConfig) OpenAIGeneratorConfig { c.MaxInputChars = 8000; return c }},
 	}
 	for _, tt := range mutations {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,6 +198,15 @@ func TestGeneratorSignatureStability(t *testing.T) {
 	moved.BaseURL = "http://other.example.com/v1"
 	if NewGenerator(moved).Signature() != g1.Signature() {
 		t.Error("base_url change altered the signature; it should not")
+	}
+
+	// Nor is the input bound behaviour. It rejects an oversized prompt before it is sent, so it
+	// cannot have produced output that a later change would make stale — and if it were covered,
+	// fitting more of a document into a view would re-derive every fragment in the corpus.
+	rebounded := cfg
+	rebounded.MaxInputChars = 8000
+	if NewGenerator(rebounded).Signature() != g1.Signature() {
+		t.Error("max_input_chars change altered the signature; it should not")
 	}
 }
 

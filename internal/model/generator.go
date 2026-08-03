@@ -147,9 +147,17 @@ func (g *openAIGenerator) Signature() string {
 // buildSignature lists every request parameter that can change the output. The format is
 // readable rather than hashed on purpose: the enricher signature in internal/delta hashes
 // this string along with prompt bytes, so hashing twice would only cost debuggability.
+//
+// MaxInputChars is deliberately absent, and its absence is the same judgement that keeps BaseURL
+// out: neither can change what the model returns. The input bound is a pre-flight guard — an
+// oversized prompt is rejected here and never sent, so it produces no cached output to go stale,
+// and two configurations differing only in that bound generate identically. Including it made
+// every cached derivation depend on a limit that only decides whether a request is attempted,
+// so raising the bound to fit more of a composed document re-derived a corpus for nothing.
+// A bound that *truncates* is a different thing and does belong to a signature: see
+// fragment_enricher.max_input_chars, which is carried by the fragment enricher's own.
 func (g *openAIGenerator) buildSignature() string {
 	parts := []string{
-		"max_input_chars=" + strconv.Itoa(g.cfg.MaxInputChars),
 		"max_output_tokens=" + strconv.Itoa(g.cfg.MaxOutputTokens),
 		"model=" + g.cfg.Model,
 		"seed=" + strconv.Itoa(g.cfg.Seed),

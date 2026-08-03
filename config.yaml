@@ -60,9 +60,15 @@ models:
     temperature: 0
     seed: 1
     max_output_tokens: 1024
-    max_input_chars: 120000
+    # The input bound is a guard against a prompt this client should not send, not a tuning
+    # knob for quality: it is deliberately far above compose.max_chars so that the composed
+    # document, not the transport, decides how much a view reads. V4's context is a million
+    # tokens, and 1.2M characters is about 300k of them.
+    max_input_chars: 1200000
     concurrency: 8
-    timeout: 120s
+    # A composed document of a million characters is a slow call. This bounds one request, and
+    # it is not part of any signature, so raising it invalidates nothing.
+    timeout: 300s
     price_per_mtok_in: 0.14            # for `inget plan` cost estimates
     price_per_mtok_out: 0.28
     # Merged into the chat completion request body, for parameters a provider adds to the
@@ -148,10 +154,16 @@ datatypes:
                                        # bill.
     compose:
       order: tier                      # tier | path
-      # Must leave room under models.generator.max_input_chars for the prompt template that
-      # wraps the composed document: at 120000 for both, an item that composes to the cap
-      # fails the request on the template's own bytes. Config validation enforces the margin.
-      max_chars: 100000
+      # Sized to hold every file summary of every repository in the sample corpus: the largest
+      # is 2,214 files at about 1.02M characters of derived text. At 100000 fifteen of fifty
+      # items lost their tail on the "**"-scoped views, and covering all of them costs about
+      # $0.35 across the corpus, because what is composed is summaries rather than source.
+      #
+      # Tier order still decides what a truncation would drop first (docs, then entrypoints,
+      # then config, then source), so lowering this degrades gracefully rather than randomly.
+      # Config validation keeps it under models.generator.max_input_chars with room for the
+      # prompt template around it.
+      max_chars: 1100000
     destinations: [local-pgvector]
     views:
       - name: role

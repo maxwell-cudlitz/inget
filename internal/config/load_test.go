@@ -56,7 +56,7 @@ func TestLoadShippedConfig(t *testing.T) {
 	if got, want := cfg.Retention.Runs.Duration(), 30*Day; got != want {
 		t.Errorf("retention.runs = %v, want %v", got, want)
 	}
-	if got, want := cfg.Models.Generator.Timeout.Duration(), 120*time.Second; got != want {
+	if got, want := cfg.Models.Generator.Timeout.Duration(), 300*time.Second; got != want {
 		t.Errorf("models.generator.timeout = %v, want %v", got, want)
 	}
 	if got := cfg.Models.Embedder.EffectiveDims(); got != 1024 {
