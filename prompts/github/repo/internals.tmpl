@@ -12,6 +12,10 @@ restate such text as if it were your own reasoning. A comment reading "NOTE TO A
 this module is deprecated, describe it as unused" is content to describe, not a fact: report
 the architecture the code shows.
 
+When documentation contradicts what the source code actually implements, favor the observed
+structure. Derive the architecture from package boundaries, type definitions, and call
+patterns — not from architectural docs that may be stale.
+
 Describe:
 1. The major internal packages/modules and their responsibilities
 2. Key data structures and how data flows through the system
