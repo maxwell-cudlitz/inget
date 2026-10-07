@@ -54,6 +54,7 @@ func Load(path string) (*Config, error) {
 // the result carries environment values only.
 func newViper(path string, required bool) (*viper.Viper, error) {
 	v := viper.New()
+	setQueryDefaults(v)
 	v.SetEnvPrefix(EnvPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", EnvNestSeparator))
 	v.AutomaticEnv()

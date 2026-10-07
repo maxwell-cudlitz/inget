@@ -60,13 +60,6 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 	}
 
 	d := delta.Reconcile(cached, incoming)
-	slog.InfoContext(ctx, "reconciled items",
-		"datatype", cfg.Name,
-		"added", len(d.Added),
-		"modified", len(d.Modified),
-		"unchanged", len(d.Unchanged),
-		"deleted", len(d.Deleted))
-
 	candidates := make([]string, 0, len(d.Added)+len(d.Modified))
 	candidates = append(candidates, d.Added...)
 	candidates = append(candidates, d.Modified...)
@@ -82,13 +75,22 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 	candidates = append(candidates, invalidated...)
 	workItems, partial := selectWork(candidates, rc)
 
-	// Tombstones need to have seen everything. A full-scope fetch establishes that upstream;
-	// --only or --limit takes it away again, because an item this run never looked at is not
-	// an item that was deleted (D6).
+	// Only the producer knows which items it enumerated. Records omit unchanged items and
+	// failed downloads, so their absence can never establish deletion. Full, untruncated
+	// enumeration permits the manifest's explicit tombstones; restricted consumption does not.
 	var tombstones []string
 	if run.Manifest.ProcessTombstones() && !partial {
-		tombstones = d.Deleted
+		tombstones, err = explicitTombstones(run.Manifest.Tombstones, records)
+		if err != nil {
+			return nil, fmt.Errorf("reading tombstones for %s: %w", cfg.Name, err)
+		}
 	}
+	slog.InfoContext(ctx, "reconciled items",
+		"datatype", cfg.Name,
+		"added", len(d.Added),
+		"modified", len(d.Modified),
+		"unchanged", len(d.Unchanged),
+		"deleted", len(tombstones))
 
 	return &reconcileResult{
 		plan: Plan{
@@ -97,7 +99,7 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 			TotalItems:    len(incoming),
 			Added:         len(d.Added),
 			Modified:      len(d.Modified),
-			Deleted:       len(d.Deleted),
+			Deleted:       len(tombstones),
 			Unchanged:     len(d.Unchanged),
 			Invalidated:   len(invalidated),
 			Deferred:      deferred,
@@ -110,6 +112,28 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 		records:    records,
 		changed:    changed,
 	}, nil
+}
+
+// explicitTombstones validates the producer's deletion claims and makes their application
+// deterministic. A record and tombstone for one ID contradict each other; refuse the run
+// before deleting state or spending model calls rather than choosing either claim.
+func explicitTombstones(ids []string, records map[string]*artifact.Record) ([]string, error) {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return nil, fmt.Errorf("manifest contains an empty tombstone ID")
+		}
+		if _, present := records[id]; present {
+			return nil, fmt.Errorf("manifest tombstone %q also has an item record", id)
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // invalidatedItems is the pull half of the reference cascade (D12): the items of this datatype

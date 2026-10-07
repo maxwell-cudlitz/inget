@@ -24,6 +24,10 @@ import (
 // longer exists is a warning, not a failed run.
 var errNotFound = errors.New("not found")
 
+// errEmptyRepository identifies GitHub's specific no-commits conflict. Other 409s
+// remain errors; callers tolerate this condition only when reading a repository tree.
+var errEmptyRepository = errors.New("empty git repository")
+
 // do issues one request with retries, returning the response with its body unread. The
 // caller closes the body.
 //
@@ -117,6 +121,9 @@ func statusError(target string, resp *http.Response) error {
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	_ = json.Unmarshal(body, &payload)
+	if resp.StatusCode == http.StatusConflict && payload.Message == "Git Repository is empty." {
+		return fmt.Errorf("%s: %w", target, errEmptyRepository)
+	}
 	if payload.Message != "" {
 		return fmt.Errorf("%s: github returned %s: %s", target, resp.Status, payload.Message)
 	}

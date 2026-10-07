@@ -94,6 +94,15 @@ models:
     concurrency: 4
     timeout: 60s
 
+# Optional query-time LLM ranking. Define models.reranker using the generator
+# fields before enabling; it is independent of the indexing generator.
+query:
+  rerank:
+    enabled: false
+    candidates: 50
+    max_candidate_chars: 200
+    prompt: prompts/query/rerank.tmpl
+
 destinations:
   - name: local-pgvector
     driver: pgvector

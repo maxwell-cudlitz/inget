@@ -51,6 +51,7 @@ type Config struct {
 	Retention    Retention     `mapstructure:"retention"`
 	Enrich       Enrich        `mapstructure:"enrich"`
 	Eval         Eval          `mapstructure:"eval"`
+	Query        Query         `mapstructure:"query"`
 	State        State         `mapstructure:"state"`
 	Models       Models        `mapstructure:"models"`
 	Destinations []Destination `mapstructure:"destinations"`
@@ -118,49 +119,6 @@ type State struct {
 	Driver string    `mapstructure:"driver"` // postgres | sqlite
 	DSNEnv SecretRef `mapstructure:"dsn_env"`
 	Path   string    `mapstructure:"path"` // sqlite only
-}
-
-// Models holds the two model roles. One driver serves both; see D10.
-type Models struct {
-	Generator Generator `mapstructure:"generator"`
-	Embedder  Embedder  `mapstructure:"embedder"`
-}
-
-// ModelClient is the transport-level configuration shared by both model roles.
-type ModelClient struct {
-	Driver      string    `mapstructure:"driver"`
-	BaseURL     string    `mapstructure:"base_url"`
-	Model       string    `mapstructure:"model"`
-	APIKeyEnv   SecretRef `mapstructure:"api_key_env"`
-	Concurrency int       `mapstructure:"concurrency"`
-	Timeout     Duration  `mapstructure:"timeout"`
-}
-
-// Generator configures the text generation role, including the prices `inget plan` uses
-// to estimate what a run will cost before it spends anything.
-type Generator struct {
-	ModelClient     `mapstructure:",squash"`
-	Temperature     float64 `mapstructure:"temperature"`
-	Seed            int     `mapstructure:"seed"`
-	MaxOutputTokens int     `mapstructure:"max_output_tokens"`
-	MaxInputChars   int     `mapstructure:"max_input_chars"`
-	PricePerMTokIn  float64 `mapstructure:"price_per_mtok_in"`
-	PricePerMTokOut float64 `mapstructure:"price_per_mtok_out"`
-	// RequestOptions are merged into the chat completion request body, for the parameters a
-	// specific provider adds to the OpenAI shape — DeepSeek's `thinking`, a reasoning effort,
-	// a top_k. They feed the generator signature, because a parameter that changes output must
-	// invalidate what was cached under the previous value. Keys this client sets itself
-	// (model, messages, temperature, seed, max_tokens, stream) are rejected.
-	RequestOptions map[string]any `mapstructure:"request_options"`
-}
-
-// Embedder configures the embedding role. TruncateDims is the Matryoshka target width;
-// zero means the model's native Dimensions.
-type Embedder struct {
-	ModelClient  `mapstructure:",squash"`
-	Dimensions   int `mapstructure:"dimensions"`
-	TruncateDims int `mapstructure:"truncate_dims"`
-	BatchSize    int `mapstructure:"batch_size"`
 }
 
 // Destination is one vector sink. The storage, table and HNSW settings are pgvector's

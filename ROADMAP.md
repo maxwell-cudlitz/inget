@@ -7,11 +7,15 @@ A third application is needed to serve as the production query API. `inget query
 The query API should:
 
 - Accept natural-language queries and return ranked results
-- Add a **reranking stage** (e.g., Cohere Rerank or a cross-encoder) between the vector search and final output to recover precision that approximate nearest-neighbour leaves on the table
+- Reuse the optional OpenAI-compatible LLM reranker implemented in `inget query`, or
+  add a dedicated cross-encoder adapter when retrieval evaluation supports it
 - Expose filtering by datatype, view, and metadata
 - Be deployable independently of the indexing pipeline
 
 The indexing pipeline (`inget-fetch`, `inget run`) and the quality gate (`inget eval`) remain separate concerns from serving queries at request time.
+
+Optional CLI reranking is implemented; the independent query service and its metadata
+filtering remain planned.
 
 ## Blob eviction after enrichment (planned, security)
 

@@ -18,8 +18,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-
-	"github.com/maxwell-cudlitz/inget/internal/model"
 )
 
 // Validate reports every problem in the configuration as a joined error.
@@ -34,6 +32,7 @@ func (c *Config) Validate() error {
 	c.validateRetention(v)
 	c.validateEnrich(v)
 	c.validateEval(v)
+	c.validateQuery(v)
 	c.validateState(v)
 	c.validateModels(v)
 	c.validateDestinations(v)
@@ -97,35 +96,6 @@ func (c *Config) validateState(v *validator) {
 		v.required("state.dsn_env", c.State.DSNEnv.Name())
 	case "sqlite":
 		v.required("state.path", c.State.Path)
-	}
-}
-
-// validateModels checks both model roles, including the truncation relationship that
-// makes an embedding request valid.
-func (c *Config) validateModels(v *validator) {
-	g := c.Models.Generator
-	v.client("models.generator", g.ModelClient)
-	if g.Temperature < 0 || g.Temperature > 2 {
-		v.failf("models.generator.temperature = %v, want between 0 and 2", g.Temperature)
-	}
-	v.positive("models.generator.max_output_tokens", int64(g.MaxOutputTokens))
-	v.positive("models.generator.max_input_chars", int64(g.MaxInputChars))
-	v.nonNegative("models.generator.price_per_mtok_in", g.PricePerMTokIn)
-	v.nonNegative("models.generator.price_per_mtok_out", g.PricePerMTokOut)
-	if err := model.ValidateRequestOptions(g.RequestOptions); err != nil {
-		v.failf("models.generator.request_options: %s", err)
-	}
-
-	e := c.Models.Embedder
-	v.client("models.embedder", e.ModelClient)
-	v.positive("models.embedder.dimensions", int64(e.Dimensions))
-	v.positive("models.embedder.batch_size", int64(e.BatchSize))
-	switch {
-	case e.TruncateDims < 0:
-		v.failf("models.embedder.truncate_dims = %d, want 0 for native width or a positive width", e.TruncateDims)
-	case e.TruncateDims > e.Dimensions:
-		v.failf("models.embedder.truncate_dims = %d exceeds dimensions = %d; truncation cannot widen a vector",
-			e.TruncateDims, e.Dimensions)
 	}
 }
 
@@ -199,7 +169,7 @@ func (v *validator) httpURL(path, got string) {
 	}
 }
 
-// client checks the settings both model roles share. Driver existence is the model
+// client checks the settings all model roles share. Driver existence is the model
 // registry's business; here it only has to be named.
 func (v *validator) client(path string, m ModelClient) {
 	v.required(path+".driver", m.Driver)

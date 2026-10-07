@@ -29,8 +29,8 @@ const SchemaVersion = 1
 
 // Scope declares whether a run enumerated the whole configured domain. It is the field
 // that makes one pipeline safe for both scheduled full syncs and event-driven partial
-// updates (D6): absence of an item from a full run means the item was deleted, absence
-// from a partial run means nothing at all.
+// updates (D6): full enumeration permits explicit tombstones for absent source items;
+// partial enumeration permits none. Records may omit unchanged or failed items in either.
 type Scope string
 
 // The two scopes. Any other value is invalid.

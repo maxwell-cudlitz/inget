@@ -43,22 +43,22 @@ roughly 18 sessions rather than 14. Steps 1–8 need no network and no credentia
 
 | Step | Sections | Lines |
 |---|---|---|
-| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1368–1403, 1347–1367, 594–638 |
-| 2 | Configuration, D2 (hashing) | 806–1001, 157–180 |
-| 3 | `artifact-envelope.md` in full, D5, D6 | all, 261–298 |
-| 4 | State schema, D13 | 641–742, 530–552 |
-| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–260, 1274–1301 |
-| 6 | D10, API/Interface | 369–456, 1002–1164 |
-| 7 | D7, D8, D9, Destination schema | 299–368, 743–805 |
-| 8 | D11, Enrichment Pipeline, Edge Cases | 457–489, 1274–1325 |
-| 9 | `github/repo`, D6, Security considerations | 1205–1226, 283–298, 1326–1346 |
-| 10 | `monday/item` | 1227–1273 |
-| 11 | D12 | 490–529 |
-| 12 | D14, Testing Strategy | 553–593, 1404–1427 |
-| 13 | Edge Cases, `artifact-envelope.md` GC | 1302–1325, 235–247 |
-| 14 | Non-Goals, Repository Layout | 1428–1436, 1368–1403 |
+| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1370–1405, 1349–1369, 596–640 |
+| 2 | Configuration, D2 (hashing) | 808–1003, 157–180 |
+| 3 | `artifact-envelope.md` in full, D5, D6 | all, 261–300 |
+| 4 | State schema, D13 | 643–744, 532–554 |
+| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–260, 1276–1303 |
+| 6 | D10, API/Interface | 371–458, 1004–1166 |
+| 7 | D7, D8, D9, Destination schema | 301–370, 745–807 |
+| 8 | D11, Enrichment Pipeline, Edge Cases | 459–491, 1276–1327 |
+| 9 | `github/repo`, D6, Security considerations | 1207–1228, 283–300, 1328–1348 |
+| 10 | `monday/item` | 1229–1275 |
+| 11 | D12 | 492–531 |
+| 12 | D14, Testing Strategy | 555–595, 1406–1429 |
+| 13 | Edge Cases, `artifact-envelope.md` GC | 1304–1327, 263–275 |
+| 14 | Non-Goals, Repository Layout | 1430–1441, 1370–1405 |
 
-These offsets are valid for `feature-design.md` at 1436 lines. Editing that file shifts
+These offsets are valid for `feature-design.md` at 1467 lines. Editing that file shifts
 everything below the edit, so regenerate the map with
 `grep -n '^#\{2,3\} ' docs/feature-design.md` whenever the design changes.
 
@@ -1865,3 +1865,88 @@ keyed by view name, composed-input hash and enricher signature, so a failure els
 does not discard work already paid for. The fragment cache is exactly what made these retries cheap
 on the derivation side; views have no such thing. Left as a follow-up because it is another state
 table, not a config change.
+
+
+## Query reranking, 2026-10-07
+
+The local Lex replacement test needs an OpenAI-compatible reranker. This explicitly
+extends the v1 query non-goal: optional CLI LLM ranking is allowed; an application-facing
+search service and HTTP server remain out of scope. The design and roadmap record it.
+
+`models.reranker` is an optional independent Generator role. `query.rerank` enables it
+(default false), selects a 50-row candidate pool per datatype, bounds candidate previews
+at 200 Unicode characters and names the disk prompt. These fields use ordinary strict
+config decoding, environment overrides and secret references. A declared/enabled model
+must be complete. Existing config still loads; query settings change neither source
+artifact hashes nor indexing generator signatures. Model schema/validation moved into
+separate files to keep source files below 250 lines.
+
+`query --rerank` can override the setting, including `--rerank=false`. Retrieval uses
+`max(limit, candidates)` rows per datatype, groups by datatype/item and keeps the best
+matching view. Identity and best-view text form each preview; JSON escaping and the
+shipped prompt's untrusted-data guards protect the query and candidates. The model must
+return a complete permutation of supplied IDs as JSON. Scores remain vector similarity;
+successful ordering adds `rank`. Failures/timeouts warn on stderr and return grouped
+vector order, while command cancellation propagates. The operation has an overall
+deadline across retries. Pools of fewer than two skip inference; larger pools are ranked
+even when they fit within the output limit. The hard pool cap is 1000, checked before
+query embedding.
+
+The ignored local Vertex profile enables this role using the same global Gemini model,
+temperature 0, 1024 output tokens, 30s timeout, zero thinking budget and JSON object mode.
+The refreshed chat bridge permits that narrow request profile and the wrapper overrides
+both generation roles. Lex's 50-row retrieval pool and vector-score preservation are
+retained. Differences: JSON with strict permutation validation instead of permissive
+CSV; best-view text instead of metadata-only previews; 200 Unicode characters instead
+of 200 bytes; explicit seed 1; common client retries bounded by 30s; ranking every pool
+of two or more (Lex CLI skipped pools fitting its output limit).
+
+Verification: `make build test lint` passed with race detection and the pinned linter
+reporting zero issues. Thirteen mock HTTP/ADC bridge tests passed. Live synthetic
+three-document ranking passed against both the direct official Vertex OpenAI endpoint
+and the refreshing bridge, putting the expected Terraform candidate first. The local
+pgvector CLI returned one grouped repository; disabling ranking returned its top three
+facets. Re-running ingestion processed/generated/embedded zero items. Four pre-existing
+wrapcheck failures in the shared model request encoder were fixed by wrapping encoding
+errors; request bodies and signatures are unchanged.
+
+The live probe establishes transport/output correctness, not retrieval-quality parity.
+The local index still holds one repo, so multi-item evaluation remains necessary. D14
+continues to evaluate vector retrieval, not this query-time ranking stage; no schema,
+state, artifact or vector migration was needed.
+
+## Full-fetch consumer deletion safety, 2026-10-07
+
+The fetch producer computes tombstones from the complete enumerated item set, while its
+records omit unchanged items and failed downloads. The consumer instead inferred deletion
+from record absence, so a subsequent full fetch could delete live indexed items. It now
+uses only explicit manifest tombstones under full, untruncated, unrestricted scope;
+deduplicates and sorts IDs; and refuses contradictory record/tombstone IDs before work.
+The plan's deletion count reports only eligible explicit tombstones. D6 and the artifact
+envelope now distinguish full enumeration from incremental record contents; no wire fields
+or schema version changed.
+
+Regression tests exercise the real fetch/commit/consumer boundary with one unchanged item,
+one failed download, one changed item and one genuinely removed item, plus empty full runs,
+deduplication, read-only planning, partial/truncated/restricted scope and contradictory
+manifests. Targeted pipeline/artifact/fetch tests pass with race detection.
+
+
+## GitHub empty-repository conflicts, 2026-10-07
+
+The full UMG fetch encountered a repo whose metadata names `main` while its tree API
+returns HTTP 409 with `Git Repository is empty.`. The connector previously counted this
+as a failed item; it now recognizes only that status/message combination and returns
+metadata/fingerprint, zero fragments and an explicit empty-repository warning. This
+matches the existing no-default-branch behavior. Other conflicts, permission errors and
+validation errors still fail and are not mistaken for empty content. No archive is
+requested for the empty repository.
+
+Table-driven HTTP regression tests exercise the real request/tree/fetch path, verifying
+metadata preservation, zero fragments, the warning, no retry/archive, other 409s, and the
+same message under other statuses. A read-only live connector probe against the affected
+repo returned zero fragments with the expected warning; it wrote no artifacts or state.
+
+Validation after both fetch-safety fixes: `make build test lint` passed, including the
+full race-test suite, `go vet ./...`, and golangci-lint (zero issues). Both local binaries
+were rebuilt. No full organization fetch or paid ingestion was started by this repair.
