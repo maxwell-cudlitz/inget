@@ -29,10 +29,12 @@ import (
 
 // Run executes one fetch and returns what it did. A dry run enumerates, applies the level-0
 // guard, and reports; it opens no writer, so it writes no blob and commits no run.
-func Run(ctx context.Context, deps Deps, rc RunConfig) (*Report, error) {
+func Run(ctx context.Context, deps Deps, rc RunConfig) (report *Report, err error) {
 	if err := rc.normalize(); err != nil {
 		return nil, err
 	}
+	emitProgress(ctx, rc.Datatype, "start", "", "waiting for lock", -1, 0)
+	defer func() { finishProgress(ctx, rc.Datatype, err) }()
 	release, err := deps.State.Lock(ctx, rc.lockKey())
 	if err != nil {
 		return nil, fmt.Errorf("locking %s for fetch: %w", rc.Datatype, err)
@@ -43,6 +45,7 @@ func Run(ctx context.Context, deps Deps, rc RunConfig) (*Report, error) {
 		}
 	}()
 
+	emitProgress(ctx, rc.Datatype, "stage", "", "loading state", -1, 0)
 	prior, err := deps.State.ItemFingerprints(ctx, rc.Datatype)
 	if err != nil {
 		return nil, err
@@ -111,6 +114,7 @@ func (r *runner) execute(ctx context.Context) (*Report, error) {
 
 // write opens the artifact writer, fetches every changed item into it, and commits.
 func (r *runner) write(ctx context.Context, runID string) (*Report, error) {
+	r.progress(ctx, "stage", "", "opening artifact run", -1, 0)
 	writer, err := r.deps.Artifacts.NewWriter(ctx, artifact.RunInfo{
 		RunID:      runID,
 		Source:     r.cfg.Source,
@@ -134,6 +138,7 @@ func (r *runner) write(ctx context.Context, runID string) (*Report, error) {
 	report := r.report(runID)
 	report.Tombstones = len(tombstones)
 
+	r.progress(ctx, "stage", "", "committing", -1, 0)
 	if _, err := writer.Commit(ctx, artifact.CommitInfo{
 		ItemsSkippedUnchanged: r.skipped,
 		BlobsWritten:          report.BlobsWritten,
@@ -160,18 +165,22 @@ func (r *runner) enumerate(ctx context.Context) error {
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(r.cfg.Concurrency)
 
+	r.progress(ctx, "stage", "", "listing items", -1, 0)
 	query := source.ListQuery{Only: r.cfg.Only, Since: r.cfg.Since, Limit: r.cfg.Limit}
 	listErr := r.deps.Connector.List(groupCtx, r.cfg.Datatype, query, func(ref source.Ref) error {
 		r.enumerated++
+		r.progress(ctx, "enumerated", ref.ID, "", -1, 1)
 		r.seen[strings.ToLower(ref.ID)] = true
 		if fingerprint, known := r.prior[ref.ID]; known && fingerprint != "" && fingerprint == ref.Fingerprint {
 			r.skipped++
+			r.progress(ctx, "completed", ref.ID, "skipped", -1, 1)
 			return nil
 		}
 		if r.cfg.DryRun {
 			r.mu.Lock()
 			r.items++
 			r.mu.Unlock()
+			r.progress(ctx, "completed", ref.ID, "planned", -1, 1)
 			return nil
 		}
 		group.Go(func() error { return r.fetchItem(ctx, ref) })
@@ -183,6 +192,10 @@ func (r *runner) enumerate(ctx context.Context) error {
 	if errors.Is(listErr, source.ErrStopList) {
 		r.truncated = true
 		listErr = nil
+	}
+	r.progress(ctx, "listed", "", "", r.enumerated, 0)
+	if !r.cfg.DryRun {
+		r.progress(ctx, "stage", "", "fetching items", -1, 0)
 	}
 	if waitErr := group.Wait(); waitErr != nil {
 		return fmt.Errorf("fetching %s items: %w", r.cfg.Datatype, waitErr)
@@ -208,41 +221,4 @@ func (r *runner) tombstones() []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// warn records a non-fatal problem. The manifest's array is bounded; the count is not, so a run
-// that hit a thousand problems still says so even though it lists two hundred.
-func (r *runner) warn(line string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.warningCount++
-	if len(r.warnings) < maxWarnings {
-		r.warnings = append(r.warnings, line)
-	}
-}
-
-// report snapshots the counters.
-func (r *runner) report(runID string) *Report {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	warnings := append([]string(nil), r.warnings...)
-	if r.warningCount > len(r.warnings) {
-		warnings = append(warnings, fmt.Sprintf("and %d further warning(s) not listed", r.warningCount-len(r.warnings)))
-	}
-	return &Report{
-		RunID:            runID,
-		Source:           r.cfg.Source,
-		Datatype:         r.cfg.Datatype,
-		Scope:            string(r.cfg.Scope),
-		DryRun:           r.cfg.DryRun,
-		Enumerated:       r.enumerated,
-		Items:            r.items,
-		SkippedUnchanged: r.skipped,
-		Failed:           r.failed,
-		Fragments:        r.fragments,
-		BlobsWritten:     r.blobsWritten,
-		BlobsReused:      r.blobsReused,
-		Truncated:        r.truncated,
-		Warnings:         warnings,
-	}
 }

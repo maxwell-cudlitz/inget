@@ -67,10 +67,19 @@ func (o Options) WithEnv() Options {
 // Setup builds a logger from opts plus environment overrides, installs it as the slog
 // default, and returns it. It is the entrypoint every binary calls once at startup.
 func Setup(opts Options) (*slog.Logger, error) {
+	return SetupWithStderr(opts, nil)
+}
+
+// SetupWithStderr coordinates default-stderr logs with an optional progress writer.
+// Explicit stdout logging remains stdout; environment overrides and redaction still apply.
+func SetupWithStderr(opts Options, stderr io.Writer) (*slog.Logger, error) {
 	opts = opts.WithEnv()
 	w, err := destination(opts.Destination)
 	if err != nil {
 		return nil, err
+	}
+	if w == os.Stderr && stderr != nil {
+		w = stderr
 	}
 	logger, err := New(w, opts)
 	if err != nil {

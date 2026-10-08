@@ -1465,3 +1465,24 @@ Configuration/prompt errors fail before spending on query embedding. The reranke
 timeout covers the entire operation, including retries. No state or vector writes are
 performed, and no indexing signature or artifact hash includes query configuration.
 The D14 evaluator continues to evaluate vector retrieval, not query-time ranking.
+
+
+## Terminal progress extension, 2026-10-07
+
+The CLI may display ephemeral human progress on stderr in addition to structured diagnostic
+logs. `--progress auto` is the default and activates only on a terminal; `plain` emits periodic
+non-ANSI snapshots and `off` preserves existing output. Redirected stderr receives the existing
+log stream in auto mode. Program data remains on stdout. This explicitly extends Observability
+without adding a service, persisted metrics, configuration fields, or cache/signature inputs.
+
+`internal/progress` provides a context observer shared by fetch and ingestion. With no observer,
+events are no-ops. Concurrent event updates and normal redacted diagnostic writes are serialized
+by the optional display; model or source content and credentials never enter progress events.
+Counts record observed outcomes, not planned spend. Fetch totals remain unknown until listing
+ends. Ingestion resets counters per artifact and keeps actual resumed completion counts. Output
+failure cannot change ingestion results. Lifecycle completion, failure, interruption and
+cancellation leave an honest final display, and the command closes its refresh goroutine.
+
+The existing pinned pure-Go `mattn/go-isatty` v0.0.23 and `golang.org/x/sys` v0.47.0 dependencies
+are promoted to direct use for terminal detection and dimensions, extending D15 for this
+optional display. Rendering, events, synchronization and timing use the standard library.

@@ -96,6 +96,7 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 	// Level-1 scope: nothing this view depends on changed.
 	if !req.anyChanged && len(view.DependsOn) > 0 && delta.ViewSkippable(req.changedKeys, view.DependsOn) {
 		ex.stats.addViewsSkipped(1)
+		ingestProgress(ctx, cfg.Name, "count", req.itemID, "skipped_views", 0, 1)
 		return pendingView{}, false, nil
 	}
 
@@ -106,6 +107,7 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 		slog.DebugContext(ctx, "view has no fragments in scope",
 			"datatype", cfg.Name, "item_id", req.itemID, "view", view.Name)
 		ex.stats.addViewsSkipped(1)
+		ingestProgress(ctx, cfg.Name, "count", req.itemID, "skipped_views", 0, 1)
 		return pendingView{}, false, nil
 	}
 
@@ -115,12 +117,14 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 	existing := req.existing[view.Name]
 	if existing.InputHash == inputHash && existing.EmbeddedHash != "" {
 		ex.stats.addViewsSkipped(1)
+		ingestProgress(ctx, cfg.Name, "count", req.itemID, "skipped_views", 0, 1)
 		return pendingView{}, false, nil
 	}
 
 	if err := ex.gen.acquire(ctx); err != nil {
 		return pendingView{}, false, fmt.Errorf("waiting to generate view %s: %w", view.Name, err)
 	}
+	ingestDetail(ctx, cfg.Name, req.itemID, "generation", view.Name)
 	text, err := enricher.Enrich(ctx, enrich.TemplateData{
 		Metadata: req.metadata,
 		Document: scoped.Text,
@@ -132,6 +136,7 @@ func generateView(ctx context.Context, ex *execution, req viewRequest, view conf
 			view.Name, cfg.Name, req.itemID, err)
 	}
 	ex.stats.addViewsGenerated(1)
+	ingestProgress(ctx, cfg.Name, "count", req.itemID, "views", 0, 1)
 
 	return pendingView{name: view.Name, text: text, inputHash: inputHash, existing: existing}, true, nil
 }
