@@ -43,6 +43,9 @@ func (c *Connector) Fetch(ctx context.Context, datatype string, ref source.Ref) 
 
 	tree, err := c.tree(ctx, item.ID, r.DefaultBranch)
 	if err != nil {
+		if errors.Is(err, errEmptyRepository) {
+			return source.Result{Item: item, Warnings: []string{item.ID + ": repository is empty; no files to index"}}, nil
+		}
 		if errors.Is(err, errNotFound) {
 			return source.Result{Item: item, Warnings: []string{item.ID + ": no tree for branch " + r.DefaultBranch}}, nil
 		}

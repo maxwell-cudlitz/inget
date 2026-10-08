@@ -110,6 +110,32 @@ For a worked version of the above against real data — 50 popular but reasonabl
 repositories, chosen with the GitHub search API, then queried both through `inget query` and
 through `curl` plus `psql` — see [`docs/local-walkthrough.md`](docs/local-walkthrough.md).
 
+### Terminal progress
+
+Fetching and ingestion show a live dashboard automatically when stderr is an interactive
+terminal. It reports discovered/finished items, active repositories and their current stages,
+skips, failures, warnings, generated views, embedding counts, and elapsed time. During source
+enumeration the total is unknown; the percentage appears after enumeration finishes.
+
+```bash
+inget-fetch --datatype github/repo --progress auto
+inget run github/repo --progress auto
+inget run github/repo --progress plain   # periodic lines without terminal escapes
+inget-fetch --datatype github/repo --progress off
+```
+
+Progress goes to stderr; reports and query results remain on stdout. Redirected stderr
+keeps existing structured logs in `auto` mode. `plain` is useful when capturing a session.
+Warnings are written between refreshes and retain normal log redaction. The panel refreshes
+once per second even while a request is waiting. Counters show work actually performed;
+generated/embedded work may still belong to an item that later fails storage or checkpointing.
+
+Ingestion shows one artifact run at a time. Resumed runs count only items actually attempted
+in this invocation; a completed pass can end below 100% if its adopted queue already contained
+done items. Failed or interrupted passes retain their status and actual counts. No ETA is
+invented while the source total is unknown. An already-running process keeps its original
+interface; rebuilt binaries enable progress on the next invocation.
+
 ### Fetching
 
 `inget-fetch` is one action, so it has no subcommand:
@@ -206,6 +232,64 @@ The query is embedded by the configured embedder, and every destination is check
 that embedder before it is searched. Searching an index built by another model returns
 rankings that look ordinary and mean nothing, so that check is a refusal rather than a
 warning.
+
+Optional LLM reranking uses the same OpenAI-compatible `/chat/completions` client as
+generation. It is disabled by default. Configure a separate model role and enable it:
+
+```yaml
+models:
+  reranker:
+    driver: openai
+    base_url: http://localhost:4000/v1
+    model: your-chat-model
+    api_key_env: INGET_RERANKER_API_KEY
+    temperature: 0
+    seed: 1
+    max_output_tokens: 1024
+    max_input_chars: 50000
+    concurrency: 1
+    timeout: 30s
+    request_options:
+      response_format: {type: json_object}
+query:
+  rerank:
+    enabled: true
+    candidates: 50
+    max_candidate_chars: 200
+    prompt: prompts/query/rerank.tmpl
+```
+
+These blocks merge into the existing configuration. `response_format` is optional for
+providers that do not support JSON mode; the prompt still asks for JSON and the client
+validates it. Provider options such as thinking settings can be added here independently
+of the indexing generator.
+
+```bash
+inget query "which repos handle terraform" --limit 5 --rerank --json
+inget query "which repos handle terraform" --rerank=false --json
+```
+
+With reranking enabled, the search requests `max(limit, candidates)` view hits per
+datatype, groups them by `(datatype, item_id)`, keeps each item's best matching view,
+and ranks at most `max(limit, candidates)` items before applying `--limit`. Grouping can
+leave fewer items than the candidate setting; this is a retrieval pool bound, not a
+guarantee of 50 unique items. Only the best view's text and identity reach the model,
+bounded by `max_candidate_chars` Unicode characters. The full query is preserved and
+the generator rejects a prompt above `max_input_chars`.
+
+No model call is made for a pool smaller than two items. With reranking enabled,
+`max(limit, candidates)` cannot exceed 1000; raise the output token budget when
+ranking a larger pool. A successful ranking adds a one-based `rank` to JSON and `#N` to readable output; `score` always remains
+the original vector similarity. The model must return every candidate ID exactly once.
+Invalid JSON, missing/duplicate/out-of-range IDs, provider failures, and a reranker
+timeout fall back to grouped vector order with a warning on stderr. Command cancellation
+propagates as an error. Configuration and prompt-loading errors fail before embedding.
+The timeout bounds the whole ranking operation, including the model client's retries.
+
+Reranking adds query-time inference latency and cost; `inget plan` estimates indexing
+only. It changes no stored vectors, generation signatures or artifact hashes. `inget eval`
+continues to measure vector retrieval, so assessing the reranker requires a separate
+multi-item set of queries with expected results.
 
 ### Operations
 

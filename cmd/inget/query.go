@@ -41,6 +41,7 @@ type queryOptions struct {
 	limit       int
 	efSearch    int
 	asJSON      bool
+	rerank      bool
 }
 
 // queryCommand builds `inget query`.
@@ -52,7 +53,8 @@ func queryCommand() *cobra.Command {
 		Short: "Search the destinations for the nearest views to a query",
 		Long: "query embeds the given text with the configured embedder and returns the nearest stored\n" +
 			"views. With no --datatype it searches every configured datatype and merges the hits by\n" +
-			"score. Results go to stdout, as a readable table or as JSON with --json.",
+			"score. Optional LLM reranking groups views by item and orders an expanded candidate pool.\n" +
+			"Results go to stdout, as a readable table or as JSON with --json.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -65,6 +67,7 @@ func queryCommand() *cobra.Command {
 	cmd.Flags().IntVar(&opts.limit, "limit", defaultQueryLimit, "how many hits to return")
 	cmd.Flags().IntVar(&opts.efSearch, "ef-search", 0, "override the destination's hnsw.ef_search")
 	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "write the hits as JSON")
+	cmd.Flags().BoolVar(&opts.rerank, "rerank", false, "override query.rerank.enabled; group items and rank with the chat model")
 	return cmd
 }
 
@@ -77,6 +80,7 @@ type hit struct {
 	Score    float64           `json:"score"`
 	Text     string            `json:"text"`
 	Metadata map[string]string `json:"metadata,omitempty"`
+	Rank     int               `json:"rank,omitempty"` // only present after successful LLM ranking; score stays vector similarity
 }
 
 // runQuery embeds the query and searches every datatype in scope.
@@ -100,6 +104,15 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 		return fmt.Errorf("--limit is %d, want 1 or more", opts.limit)
 	}
 
+	ranker, err := prepareQueryRanker(cmd, cfg, opts)
+	if err != nil {
+		return err
+	}
+	searchOpts := opts
+	if ranker != nil {
+		searchOpts.limit = max(opts.limit, cfg.Query.Rerank.Candidates)
+	}
+
 	emb, err := buildEmbedder(cfg)
 	if err != nil {
 		return err
@@ -111,7 +124,7 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 
 	var hits []hit
 	for _, dt := range datatypes {
-		found, err := searchDatatype(cmd.Context(), cfg, emb, dt, vector, opts)
+		found, err := searchDatatype(cmd.Context(), cfg, emb, dt, vector, searchOpts)
 		if err != nil {
 			return err
 		}
@@ -119,8 +132,10 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	}
 	// Merged across datatypes, so the ordering the destination gave us no longer holds.
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
-	if len(hits) > opts.limit {
-		hits = hits[:opts.limit]
+	hits, err = finishQueryHits(cmd.Context(), text, hits, opts.limit, cfg.Query.Rerank.Candidates,
+		ranker, cfg.Models.Reranker.Timeout.Duration())
+	if err != nil {
+		return err
 	}
 
 	slog.InfoContext(cmd.Context(), "query complete", "datatypes", len(datatypes),
@@ -210,25 +225,4 @@ func checkQueryView(dt config.Datatype, view string) error {
 		}
 	}
 	return fmt.Errorf("datatype %s has no view %q (declared: %v)", dt.Name, view, viewNames(dt))
-}
-
-// printHits writes the readable rendering: one header line per hit, then a snippet.
-func printHits(hits []hit) {
-	if len(hits) == 0 {
-		fmt.Println("no hits")
-		return
-	}
-	for _, h := range hits {
-		fmt.Printf("%.4f  %s  %s  [%s]\n", h.Score, h.Datatype, h.ItemID, h.ViewName)
-		fmt.Printf("        %s\n", snippet(h.Text))
-	}
-}
-
-// snippet renders a view's text as one line, bounded so a screenful of hits stays readable.
-func snippet(text string) string {
-	flat := strings.Join(strings.Fields(text), " ")
-	if len(flat) <= snippetChars {
-		return flat
-	}
-	return flat[:snippetChars] + "…"
 }

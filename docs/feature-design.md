@@ -282,9 +282,11 @@ Two-phase visibility means a crashed run leaves orphan objects until GC.
 
 ### D6. Manifests carry a scope flag
 
-**Decision.** Every manifest declares `scope: full | partial`. Absence of an item from
-a `full` run's records implies deletion and produces a tombstone. Absence from a
-`partial` run implies nothing.
+**Decision.** Every manifest declares `scope: full | partial`. A full, untruncated
+producer enumeration permits explicit tombstones for items absent from the enumerated
+domain. Records carry fetched changes and may omit unchanged or failed items; record
+absence never proves deletion. The consumer applies only manifest tombstones, and only
+under full, untruncated scope without consumer `--only` or a reached `--limit`.
 
 **Rationale.** Without this, a webhook-triggered run carrying one changed Monday item
 would be indistinguishable from "every other item was deleted", and `inget` would
@@ -1427,10 +1429,60 @@ prompt change, reported per datatype, with `--embedder` for A/B comparison.
 
 ## Non-Goals for v1
 
-- Search, reranking, and any HTTP server. `inget query` exists for verification only.
+- An application-facing search service or any HTTP server. `inget query` remains an
+  operator verification tool; optional OpenAI-compatible LLM reranking is an authorized
+  CLI extension (2026-10-07), documented below.
 - The `splitter` enricher. Deferred until a datatype has genuinely unstructured long
   documents, and it should then be contextualized chunking rather than naive splitting.
 - Webhook receiver. `--event-file` is the integration point for an external one.
 - Destinations beyond pgvector. The interface exists; Qdrant is the expected second.
 - Metrics and tracing.
 - Datatypes beyond `github/repo` and `monday/item`.
+
+## Query reranking extension (2026-10-07)
+
+The optional `query.rerank` block controls CLI retrieval only: enabled (default false),
+50 view candidates per datatype, 200 Unicode characters per candidate preview, and
+`prompts/query/rerank.tmpl`. `models.reranker` is an independent optional Generator
+configuration using the same D10 OpenAI-compatible transport. It must be complete when
+enabled or declared; it never inherits or changes indexing generator parameters.
+
+`--rerank` overrides the enable flag, including `--rerank=false`. Retrieval requests
+`max(limit, candidates)` rows per datatype, preserves D7 model assertions, merges by
+vector similarity and groups by datatype/item, retaining the best view. At most
+`max(limit, candidates)` grouped items are ranked. Pools smaller than two items need no
+ranking request; larger pools are ranked even when they fit within the output limit.
+With ranking enabled, `max(limit, candidates)` must not exceed 1000. Identity and
+best-view text form a bounded preview; a disk prompt encloses the JSON-escaped query and previews as untrusted data.
+Query prompts are the exception to the per-source prompt layout because their input
+spans datatypes; they are not cached indexing derivations.
+
+The chat response must be one JSON object containing a complete permutation of the
+supplied one-based IDs under `ranking`. Only order changes: vector scores are retained
+and a successful ranking adds `rank` to output. Runtime ranking failures emit a stderr
+warning and return grouped vector order; cancellation of the command propagates.
+Configuration/prompt errors fail before spending on query embedding. The reranker
+timeout covers the entire operation, including retries. No state or vector writes are
+performed, and no indexing signature or artifact hash includes query configuration.
+The D14 evaluator continues to evaluate vector retrieval, not query-time ranking.
+
+
+## Terminal progress extension, 2026-10-07
+
+The CLI may display ephemeral human progress on stderr in addition to structured diagnostic
+logs. `--progress auto` is the default and activates only on a terminal; `plain` emits periodic
+non-ANSI snapshots and `off` preserves existing output. Redirected stderr receives the existing
+log stream in auto mode. Program data remains on stdout. This explicitly extends Observability
+without adding a service, persisted metrics, configuration fields, or cache/signature inputs.
+
+`internal/progress` provides a context observer shared by fetch and ingestion. With no observer,
+events are no-ops. Concurrent event updates and normal redacted diagnostic writes are serialized
+by the optional display; model or source content and credentials never enter progress events.
+Counts record observed outcomes, not planned spend. Fetch totals remain unknown until listing
+ends. Ingestion resets counters per artifact and keeps actual resumed completion counts. Output
+failure cannot change ingestion results. Lifecycle completion, failure, interruption and
+cancellation leave an honest final display, and the command closes its refresh goroutine.
+
+The existing pinned pure-Go `mattn/go-isatty` v0.0.23 and `golang.org/x/sys` v0.47.0 dependencies
+are promoted to direct use for terminal detection and dimensions, extending D15 for this
+optional display. Rendering, events, synchronization and timing use the standard library.

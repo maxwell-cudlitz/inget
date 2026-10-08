@@ -25,11 +25,15 @@ import (
 // warned about rather than silently under-quoted.
 func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*Plan, *Stats, error) {
 	cfg := deps.Config
+	ingestInitial(ctx, cfg.Name, rc.DryRun)
 	slog.InfoContext(ctx, "pipeline starting",
 		"datatype", cfg.Name, "concurrency", rc.Concurrency, "dry_run", rc.DryRun)
 
 	pending, err := pendingRuns(ctx, deps, arts)
 	if err != nil {
+		if !rc.DryRun {
+			ingestDone(ctx, cfg.Name, nil, err)
+		}
 		return nil, nil, err
 	}
 
@@ -46,8 +50,10 @@ func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*P
 		return &result.plan, nil, nil
 	}
 
+	ingestProgress(ctx, cfg.Name, "stage", "", "waiting for lock", 0, 0)
 	release, err := deps.State.Lock(ctx, cfg.Name)
 	if err != nil {
+		ingestDone(ctx, cfg.Name, nil, err)
 		return nil, nil, fmt.Errorf("acquiring lock for %s: %w", cfg.Name, err)
 	}
 	defer func() {
@@ -77,6 +83,7 @@ func drain(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, p
 			last = plan
 		}
 		if err != nil {
+			ingestDone(ctx, cfg.Name, stats, err)
 			return last, nil, err
 		}
 		total.add(stats)
@@ -88,6 +95,7 @@ func drain(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, p
 		clean := stats != nil && stats.ItemsFailed == 0 && !ShuttingDown(ctx) && !rc.DryRun && plan != nil && !plan.Restricted
 		if advancing && clean {
 			if err := deps.State.PutConsumedArtifactRun(ctx, cfg.Name, artifactRunID); err != nil {
+				ingestDone(ctx, cfg.Name, stats, err)
 				return last, nil, err
 			}
 		} else {
@@ -96,6 +104,7 @@ func drain(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, p
 				"datatype", cfg.Name, "artifact_run_id", artifactRunID,
 				"failed_items", failedCount(stats), "restricted", plan != nil && plan.Restricted)
 		}
+		ingestDone(ctx, cfg.Name, stats, nil)
 		if ShuttingDown(ctx) {
 			slog.InfoContext(ctx, "shutdown requested, stopping the drain",
 				"datatype", cfg.Name, "consumed", i+1, "pending", len(pending))
@@ -115,10 +124,12 @@ func failedCount(stats *Stats) int {
 
 // consume processes exactly one artifact run: reconcile, resolve the run row, tombstone, work.
 func consume(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, artifactRunID string) (*Plan, *Stats, error) {
+	ingestProgress(ctx, deps.Config.Name, "stage", "", "reconciling", 0, 0)
 	result, err := planOnly(ctx, deps, arts, rc, artifactRunID)
 	if err != nil {
 		return nil, nil, err
 	}
+	ingestProgress(ctx, deps.Config.Name, "start", "", "", len(result.plan.WorkItems), 0)
 
 	runID, resuming, err := resolveRun(ctx, deps, rc, result)
 	if err != nil {

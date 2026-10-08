@@ -113,7 +113,9 @@ which means a repository where one file changed uploads exactly one blob.
 event-driven partial updates.
 
 - `full` — the producer enumerated the entire configured domain. An item in state but
-  absent from the records is deleted at the source, and appears in `tombstones`.
+  absent from that enumerated set is deleted at the source, and appears in `tombstones`.
+  Records may omit unchanged items and failed downloads: record absence never establishes
+  deletion, and consumers MUST NOT derive additional tombstones from it.
 - `partial` — the producer processed a caller-supplied subset (`--only`,
   `--event-file`, `--since`). Absence implies **nothing**. `tombstones` MUST be empty
   and a consumer MUST NOT infer deletions.
@@ -227,7 +229,11 @@ never order or parse them. Consequences:
 2. Reject unknown `schema_version`.
 3. Verify shard `sha256` before parsing; a mismatch fails the run rather than
    processing partial data.
-4. Process `tombstones` only when `scope == "full" && truncated == false`.
+4. Process only the explicit manifest `tombstones`, and only when
+   `scope == "full" && truncated == false`, without narrowing consumption by `--only`
+   or a reached `--limit`. An eligible tombstone cannot also have a record in the run;
+   reject that contradiction before performing work. Duplicate tombstone IDs represent
+   one deletion. Never infer deletion from missing records.
 5. Treat an empty `fingerprint` as changed.
 6. Treat `metadata` as untrusted input. It originates from third-party systems and
    flows into LLM prompts; see the security section of `feature-design.md`.

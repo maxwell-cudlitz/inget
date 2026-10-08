@@ -54,23 +54,32 @@ func ValidateRequestOptions(options map[string]any) error {
 // function refuses it again, because the client is also constructed directly in tests.
 func encodeRequest(body chatRequest, options map[string]any) ([]byte, error) {
 	if len(options) == 0 {
-		return json.Marshal(body)
+		return marshalChatRequest(body)
 	}
 	if err := ValidateRequestOptions(options); err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(body)
+	encoded, err := marshalChatRequest(body)
 	if err != nil {
 		return nil, err
 	}
 	var merged map[string]any
 	if err := json.Unmarshal(encoded, &merged); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decoding chat request for options: %w", err)
 	}
 	for key, value := range options {
 		merged[key] = value
 	}
-	return json.Marshal(merged)
+	return marshalChatRequest(merged)
+}
+
+// marshalChatRequest wraps encoding failures at the model boundary.
+func marshalChatRequest(value any) ([]byte, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encoding chat request: %w", err)
+	}
+	return data, nil
 }
 
 // renderRequestOptions returns a stable string for the signature. encoding/json sorts map keys,
