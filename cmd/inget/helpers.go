@@ -171,6 +171,11 @@ func reportPlan(plan *pipeline.Plan) error {
 		"output_tokens", est.OutputTokens,
 		"cost_usd", est.CostUSD,
 		"changed_signatures", est.ChangedSignatures)
+	if est.Expected != nil {
+		slog.Info("calibrated cost estimate", "datatype", plan.Datatype,
+			"expected_cost_usd", est.Expected.CostUSD, "approximate", est.Expected.Approximate,
+			"exclusions", est.Expected.Exclusions)
+	}
 
 	data, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {

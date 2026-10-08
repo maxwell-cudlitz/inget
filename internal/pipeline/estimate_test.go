@@ -10,6 +10,7 @@ import (
 
 	"github.com/maxwell-cudlitz/inget/internal/artifact"
 	"github.com/maxwell-cudlitz/inget/internal/config"
+	"github.com/maxwell-cudlitz/inget/internal/enrich"
 )
 
 // estimateFor prices one record with the harness's stores, with views under the caller's control.
@@ -51,8 +52,12 @@ func TestEstimateBoundsFragmentInputByMaxInputChars(t *testing.T) {
 	if est.FragmentDerivations != 1 {
 		t.Fatalf("fragment derivations = %d, want 1", est.FragmentDerivations)
 	}
-	if want := 400 / 4; est.InputTokens != want {
-		t.Errorf("input tokens = %d, want %d (the bound, not the file)", est.InputTokens, want)
+	wrapper, err := h.deps.FragEnricher.PromptChars(enrich.FragmentTemplateData{Key: "big.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (400 + wrapper + h.deps.FragEnricher.TruncationNoticeChars()) / 4; est.InputTokens != want {
+		t.Errorf("input tokens = %d, want %d (bound plus wrapper and truncation notice)", est.InputTokens, want)
 	}
 }
 
@@ -67,7 +72,7 @@ func TestEstimateBoundsViewInputByComposeMaxChars(t *testing.T) {
 	if est.ViewGenerations != 1 {
 		t.Fatalf("view generations = %d, want 1", est.ViewGenerations)
 	}
-	if want := 800 / 4; est.InputTokens != want {
+	if want := (800 + len("Generate role: ")) / 4; est.InputTokens != want {
 		t.Errorf("input tokens = %d, want %d", est.InputTokens, want)
 	}
 }

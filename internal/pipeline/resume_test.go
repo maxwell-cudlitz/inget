@@ -101,8 +101,8 @@ func TestPlanMatchesRun(t *testing.T) {
 	}
 
 	est := plan.Estimate
-	if est.FragmentDerivations != 2*numFrags {
-		t.Errorf("plan: fragment derivations = %d, want %d", est.FragmentDerivations, 2*numFrags)
+	if est.FragmentDerivations != numFrags {
+		t.Errorf("plan: fragment derivations = %d, want %d", est.FragmentDerivations, numFrags)
 	}
 	if est.ViewGenerations != 2*numViews {
 		t.Errorf("plan: view generations = %d, want %d", est.ViewGenerations, 2*numViews)
@@ -126,8 +126,7 @@ func TestPlanMatchesRun(t *testing.T) {
 		t.Errorf("run generated %d views, over the estimated bound of %d",
 			stats.ViewsGenerated, est.ViewGenerations)
 	}
-	// The estimate counts a derivation per fragment per item; the run shares identical
-	// fragments between the two items through the cache, so it does strictly less.
+	// Both estimate and runtime share identical fragment cache keys between items.
 	if stats.FragmentsEnrich > est.FragmentDerivations {
 		t.Errorf("run derived %d fragments, over the estimated bound of %d",
 			stats.FragmentsEnrich, est.FragmentDerivations)

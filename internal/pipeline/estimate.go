@@ -1,14 +1,14 @@
 // What a run would spend, reported before it spends it.
 //
-// `inget plan` exists to make cost visible, so the numbers here are deliberately upper
-// bounds. An exact count is not obtainable without doing the work: the level-2 guard
+// `inget plan` exists to make cost visible, so its legacy numbers form a conservative
+// generation allowance. An exact count is not obtainable without doing the work: the level-2 guard
 // compares a hash of the composed derivations, and the derivations are what the estimate is
 // trying to price. So every view whose scope changed is counted as a generation even though
 // some of them will turn out to compose to an unchanged document, every call is priced at the
 // full output budget rather than the shorter completion it will probably return, and a view's
 // input is the raw size of the fragments in its scope even though what it composes is their
-// shorter derived text. Input is bounded by the same truncation the run applies —
-// fragment_enricher.max_input_chars per fragment, compose.max_chars per view — because pricing
+// shorter derived text. Rendered prompt wrappers are included. Input is bounded by the
+// same fragment and composition truncation the run applies, because pricing
 // characters no call sends is not conservatism, it is a wrong number.
 package pipeline
 
@@ -16,26 +16,26 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 
 	"github.com/maxwell-cudlitz/inget/internal/artifact"
 	"github.com/maxwell-cudlitz/inget/internal/delta"
 )
 
 // charsPerToken converts characters to tokens for estimation. Four is the usual ratio for
-// English prose and source code in byte-pair encodings; it is an estimate feeding an
-// estimate, which is why the result is labelled an upper bound and not a quote.
+// English prose and source code in byte-pair encodings. Tokenization, retries and embedding
+// charges mean the legacy upper_bound label is not a guaranteed provider-bill ceiling.
 const charsPerToken = 4
 
-// Estimate is what a run would cost, as an upper bound.
+// Estimate carries the legacy generation allowance and optional calibrated expectation.
 type Estimate struct {
-	FragmentDerivations int      `json:"fragment_derivations"`
-	ViewGenerations     int      `json:"view_generations"`
-	InputTokens         int      `json:"input_tokens"`
-	OutputTokens        int      `json:"output_tokens"`
-	CostUSD             float64  `json:"cost_usd"`
-	ChangedSignatures   []string `json:"changed_signatures,omitempty"`
-	UpperBound          bool     `json:"upper_bound"`
+	FragmentDerivations int               `json:"fragment_derivations"`
+	ViewGenerations     int               `json:"view_generations"`
+	InputTokens         int               `json:"input_tokens"`
+	OutputTokens        int               `json:"output_tokens"`
+	CostUSD             float64           `json:"cost_usd"`
+	ChangedSignatures   []string          `json:"changed_signatures,omitempty"`
+	UpperBound          bool              `json:"upper_bound"`
+	Expected            *ExpectedEstimate `json:"expected,omitempty"`
 }
 
 // surfaceSignatureChanges warns about any enricher signature that no longer matches what was
@@ -67,6 +67,12 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 	cfg := deps.Config
 	est := result.plan.Estimate
 	est.UpperBound = true
+	if err := validateEstimateProfile(rc.EstimateProfile, deps, rc.Pricing); err != nil {
+		return err
+	}
+	if rc.EstimateProfile != nil {
+		est.Expected = newExpectedEstimate(rc.EstimateProfile)
+	}
 
 	var fragSig string
 	fragMaxChars := 0
@@ -75,18 +81,27 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 		fragMaxChars = deps.FragEnricher.MaxInputChars()
 	}
 
+	frags := fragEstimate{sig: fragSig, maxChars: fragMaxChars, seen: make(map[string]bool), chars: make(map[string]float64)}
 	for _, itemID := range result.plan.WorkItems {
 		rec, ok := result.records[itemID]
 		if !ok {
 			continue
 		}
-		if err := estimateItem(ctx, deps, rc, rec, fragEstimate{sig: fragSig, maxChars: fragMaxChars}, &est); err != nil {
+		if err := estimateItem(ctx, deps, rc, rec, frags, &est); err != nil {
 			return err
 		}
 	}
 
 	est.CostUSD = float64(est.InputTokens)/1e6*rc.Pricing.PerMTokIn +
 		float64(est.OutputTokens)/1e6*rc.Pricing.PerMTokOut
+	if est.Expected != nil {
+		est.Expected.CostUSD = est.Expected.InputTokens/1e6*rc.Pricing.PerMTokIn +
+			est.Expected.OutputTokens/1e6*rc.Pricing.PerMTokOut
+		if !finiteNonNegative(est.Expected.InputTokens) || !finiteNonNegative(est.Expected.OutputTokens) ||
+			!finiteNonNegative(est.Expected.CostUSD) {
+			return fmt.Errorf("estimate profile produced a non-finite cost or token estimate")
+		}
+	}
 	result.plan.Estimate = est
 	return nil
 }
@@ -97,11 +112,19 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 type fragEstimate struct {
 	sig      string
 	maxChars int
+	seen     map[string]bool
+	chars    map[string]float64
 }
 
 // estimateItem adds one item's derivations and view generations to est.
 func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Record, frags fragEstimate, est *Estimate) error {
 	cfg := deps.Config
+	if frags.seen == nil {
+		frags.seen = make(map[string]bool)
+	}
+	if frags.chars == nil {
+		frags.chars = make(map[string]float64)
+	}
 
 	cached, err := deps.State.Fragments(ctx, cfg.Name, rec.ItemID)
 	if err != nil {
@@ -119,15 +142,28 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 			continue
 		}
 		key := delta.FragmentCacheKey(frag.Key, frag.Fingerprint, frags.sig)
+		if _, seen := frags.seen[key]; seen {
+			continue
+		}
 		hit, err := deps.State.HasDerivation(ctx, key)
 		if err != nil {
 			return fmt.Errorf("checking derivation cache for %s/%s: %w", cfg.Name, frag.Key, err)
 		}
+		frags.seen[key] = hit
+		if est.Expected != nil {
+			if err := expectedFragment(ctx, deps, rc.EstimateProfile, frag, frags, key, hit, est.Expected); err != nil {
+				return err
+			}
+		}
 		if hit {
 			continue
 		}
+		chars, err := fragmentPromptChars(deps, frag, frags.maxChars)
+		if err != nil {
+			return err
+		}
 		est.FragmentDerivations++
-		est.InputTokens += tokensForChars(boundChars(int(frag.Bytes), frags.maxChars))
+		est.InputTokens += tokensForChars(chars)
 		est.OutputTokens += rc.Pricing.MaxOutputTokens
 	}
 
@@ -139,9 +175,18 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 		if scoped == 0 {
 			continue
 		}
+		wrapper, err := viewPromptChars(deps, rec, view, 0)
+		if err != nil {
+			return err
+		}
 		est.ViewGenerations++
-		est.InputTokens += tokensForChars(boundChars(scoped, cfg.ComposeMaxChars))
+		est.InputTokens += tokensForChars(boundChars(scoped, cfg.ComposeMaxChars) + int(wrapper))
 		est.OutputTokens += rc.Pricing.MaxOutputTokens
+		if est.Expected != nil {
+			if err := expectedView(deps, rc.EstimateProfile, rec, view, frags, est.Expected); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -174,34 +219,4 @@ func scopedBytes(rec *artifact.Record, dependsOn []string) int {
 // tokensForChars converts a character count to an estimated token count.
 func tokensForChars(chars int) int {
 	return chars / charsPerToken
-}
-
-// currentSignatures returns the signature of every enricher scope this datatype uses, keyed
-// by the scope name recorded in state.
-func currentSignatures(deps Deps) map[string]string {
-	sigs := make(map[string]string, len(deps.Enrichers)+1)
-	for name, enricher := range deps.Enrichers {
-		sigs[deps.Config.Name+":view:"+name] = enricher.Signature()
-	}
-	if deps.Config.FragmentEnricher && deps.FragEnricher != nil {
-		sigs[deps.Config.Name+":fragment"] = deps.FragEnricher.Signature()
-	}
-	return sigs
-}
-
-// changedSignatures returns the scopes whose recorded signature differs from the current
-// one, sorted. A scope that has never been recorded is not a change: everything is new once.
-func changedSignatures(ctx context.Context, deps Deps) ([]string, error) {
-	var changed []string
-	for scope, sig := range currentSignatures(deps) {
-		previous, err := deps.State.Signature(ctx, scope)
-		if err != nil {
-			return nil, fmt.Errorf("reading recorded signature for %s: %w", scope, err)
-		}
-		if previous != "" && previous != sig {
-			changed = append(changed, scope)
-		}
-	}
-	sort.Strings(changed)
-	return changed, nil
 }

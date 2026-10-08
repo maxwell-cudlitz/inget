@@ -21,9 +21,10 @@ import (
 
 // runOptions are the flags run and plan share.
 type runOptions struct {
-	dryRun bool
-	only   []string
-	limit  int
+	dryRun          bool
+	only            []string
+	limit           int
+	estimateProfile string
 }
 
 // runCommand builds `inget run`.
@@ -57,6 +58,9 @@ func execute(cmd *cobra.Command, args []string, opts runOptions) error {
 	datatypes, err := selectDatatypes(cfg, args)
 	if err != nil {
 		return err
+	}
+	if opts.estimateProfile != "" && len(datatypes) != 1 {
+		return fmt.Errorf("--estimate-profile requires selecting a single datatype")
 	}
 
 	ctx, cancel, shutdownCh := pipeline.NotifyShutdown(cmd.Context())
@@ -105,6 +109,13 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 		},
 		MaxReferenceDepth: cfg.Enrich.MaxReferenceDepth,
 		MaxCascadePerRun:  cfg.Enrich.MaxCascadePerRun,
+	}
+	if opts.estimateProfile != "" {
+		profile, err := loadEstimateProfile(opts.estimateProfile)
+		if err != nil {
+			return err
+		}
+		rc.EstimateProfile = profile
 	}
 
 	plan, stats, err := pipeline.Run(ctx, deps, arts, rc)

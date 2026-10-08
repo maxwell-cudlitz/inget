@@ -80,6 +80,15 @@ func deriveFragment(ctx context.Context, ex *execution, itemID string, frag arti
 	// vendored dependency — and the persisted cache cannot help while both are in flight, so
 	// without this each of them pays for the other's tokens.
 	derived, err, _ := ex.derive.Do(cacheKey, func() (any, error) {
+		// The first miss may predate another worker's completed derivation. A completed
+		// singleflight call is forgotten, so recheck durable state before spending again.
+		cached, found, err := ex.deps.State.Derivation(ctx, cacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("rechecking the derivation cache: %w", err)
+		}
+		if found {
+			return cached, nil
+		}
 		return generateDerivation(ctx, ex, itemID, frag, cacheKey)
 	})
 	if err != nil {
