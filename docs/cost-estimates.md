@@ -3,6 +3,8 @@
 `inget plan` reads artifacts and state without calling models or updating the
 index. It reports remaining work against the current cache, rather than repeating
 the cost of an initial index.
+If artifacts have a backlog, the estimate covers the named oldest pending run;
+`pending_artifact_runs` reports the backlog, while ingestion drains all pending runs.
 
 The existing `estimate.cost_usd` is a conservative generation allowance: it uses
 maximum output tokens and approximately four input characters per token. Input
@@ -27,6 +29,7 @@ can also affect accuracy.
 
 The profile must match the datatype and every current enricher signature. Model,
 prompt or signed generation-setting changes reject stale profiles with an error.
+Select a single datatype when using a profile.
 It changes reporting only: signatures, cache keys, generation and ingestion
 configuration are unaffected. Planning reads cached outputs without touching their
 last-hit timestamps. No profile means the normal allowance alone is reported.
@@ -71,7 +74,8 @@ The example illustrates the format; it does not supply usable signatures.
 Expected estimates are approximate generation costs at the configured prices.
 They exclude embeddings and retries, and may count views whose final composition
 hash will turn out to be unchanged. Output averages can vary with repository size,
-file type and model behavior. Record profile provenance separately, including the
+file type and model behavior. Reference-injected content and resolved reference
+metadata are not modeled. Record profile provenance separately, including the
 sample selection, provider usage, failures and fit quality. Paid truncated
 responses belong in usage measurements even when indexing failed; the estimate
 does not predict successful completion.

@@ -1982,3 +1982,54 @@ The Docker buildx activity directory was redirected to workspace `BUILDX_CONFIG`
 snapshot did not need writes under the user Docker configuration directory. A real
 GitHub metadata-only dry run through the local wrapper verified automatic TTY and plain
 progress against isolated SQLite state; JSON stdout stayed intact and models were unused.
+
+
+## Usage-calibrated planning costs, 2026-10-08
+
+The native planner now counts distinct uncached fragment cache keys across the
+whole work set, includes rendered prompt wrappers and truncation notices in its
+legacy allowance, and accepts `plan --estimate-profile PATH` for an additional
+`estimate.expected` forecast. Versioned JSON profiles fit input tokens to complete
+prompt characters and record mean completion usage per stage. Expected composition
+uses cached summary rune lengths or measured mean lengths, including headings,
+separators, scope filters and compose caps. The historical `upper_bound` label
+remains compatible; it is a generation allowance, not a provider-bill guarantee.
+The design and docs/cost-estimates.md distinguish these reporting contracts.
+
+Profiles match datatype and every enricher signature, require finite nonnegative
+values and samples, and reject stale/missing/extra stages. The strict CLI loader
+rejects unknown fields, trailing JSON and files over 1 MiB. One profile applies to
+one selected datatype. Profiles are reporting-only RunConfig inputs, outside
+configuration hashes, generation settings and cache signatures. Planning excludes
+embedding/retry charges and does not model resolved reference inputs. It still
+covers the oldest named pending artifact run; ingestion drains the backlog.
+
+A new state PeekDerivation reads output without touching last_hit_at. Prompt sizing
+renders without calling generation. The existing per-run singleflight derivation
+path also rechecks durable cache after entering its closure, avoiding a duplicate
+paid call when an outer miss predates another worker's completed cache write.
+This retains native cache patterns without cross-process locking or schema changes.
+
+The ignored local wrapper automatically supplies .inget/local/estimate-profile.json
+for plan, preserving explicit profile overrides. Its calibration uses 2,199 measured
+fragment responses, 121 view responses from 17 attempted repositories plus two views
+of the interrupted eighteenth, and 2,206 cached summary lengths. Four paid truncated
+search_terms responses remain included; no sample was resumed and no prompts changed.
+Larger repositories and retries remain sources of forecast uncertainty.
+
+Validation: make build and the full make test race suite passed, including fresh
+scratch PostgreSQL state/destination tests as well as SQLite. Pinned golangci-lint
+reported zero issues after one redundant test selector was corrected; the affected
+race test passed again. make release-check and make release-snapshot passed for all
+four binary targets and both local Docker architectures, publishing nothing.
+
+The exact user command, python3 .inget/local/local.py --refreshing plan github/repo,
+completed against the existing full artifact in 204 seconds: 473,047 unique remaining
+fragment derivations and 15,771 possible view generations. The allowance is
+$1,732.8192295; measured expected generation cost is $289.9396307592. Both use current
+configured pricing and exclude embeddings/retries. A native no-profile limited plan
+omitted expected, and a stale profile failed before estimating. Counts and complete
+row hashes of all nine operational state tables, including cache timestamps and the
+consumption marker, were unchanged; the vector count stayed 98. No model requests or
+new paid inference occurred. The local binary was rebuilt after an initial wrapper
+invocation exposed the flag before integration had finished.

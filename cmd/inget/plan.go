@@ -20,8 +20,8 @@ func planCommand() *cobra.Command {
 		Short: "Show what a run would do and what it would cost",
 		Long: "plan reconciles the latest artifact run against persisted state and reports what\n" +
 			"items would be processed, skipped or tombstoned, how many derivations and view\n" +
-			"generations that implies, and the estimated tokens and cost. Estimates are upper\n" +
-			"bounds. --estimate-profile adds an approximate expected cost calibrated from\n" +
+			"generations that implies, and a conservative generation allowance.\n" +
+			"--estimate-profile adds an approximate expected cost calibrated from\n" +
 			"observed usage, without changing generation settings. No LLM calls, embeddings\n" +
 			"or destination writes are performed.",
 		Args:         cobra.MaximumNArgs(1),

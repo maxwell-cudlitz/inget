@@ -10,8 +10,8 @@ import (
 
 func TestLoadEstimateProfile(t *testing.T) {
 	tests := []struct {
-		name string
-		data string
+		name      string
+		data      string
 		wantError bool
 	}{
 		{"valid", `{"version":1,"datatype":"github/repo","views":{}}`, false},

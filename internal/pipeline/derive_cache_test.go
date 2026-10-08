@@ -73,7 +73,7 @@ func (s *staleMissStore) Derivation(ctx context.Context, key string) (string, bo
 	s.reads++
 	if s.reads == 1 {
 		if s.derivation.CacheKey != "" {
-			if err := s.Store.PutDerivation(ctx, s.derivation); err != nil {
+			if err := s.PutDerivation(ctx, s.derivation); err != nil {
 				return "", false, fmt.Errorf("simulating concurrent derivation: %w", err)
 			}
 		}

@@ -21,9 +21,9 @@ import (
 
 // runOptions are the flags run and plan share.
 type runOptions struct {
-	dryRun bool
-	only   []string
-	limit  int
+	dryRun          bool
+	only            []string
+	limit           int
 	estimateProfile string
 }
 
@@ -58,6 +58,9 @@ func execute(cmd *cobra.Command, args []string, opts runOptions) error {
 	datatypes, err := selectDatatypes(cfg, args)
 	if err != nil {
 		return err
+	}
+	if opts.estimateProfile != "" && len(datatypes) != 1 {
+		return fmt.Errorf("--estimate-profile requires selecting a single datatype")
 	}
 
 	ctx, cancel, shutdownCh := pipeline.NotifyShutdown(cmd.Context())
