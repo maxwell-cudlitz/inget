@@ -103,6 +103,7 @@ func generateDerivation(ctx context.Context, ex *execution, itemID string, frag 
 	if err := ex.gen.acquire(ctx); err != nil {
 		return "", err
 	}
+	ingestDetail(ctx, cfg.Name, itemID, "enrichment", frag.Key)
 	derived, err := ex.deps.FragEnricher.Enrich(ctx, enrich.FragmentTemplateData{
 		Key:     frag.Key,
 		Content: content,
@@ -112,6 +113,7 @@ func generateDerivation(ctx context.Context, ex *execution, itemID string, frag 
 		return "", err
 	}
 	ex.stats.addFragmentsEnriched(1)
+	ingestProgress(ctx, cfg.Name, "count", itemID, "fragments", 0, 1)
 
 	deriv := state.Derivation{
 		CacheKey:  cacheKey,

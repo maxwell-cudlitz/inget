@@ -36,6 +36,7 @@ import (
 func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error {
 	cfg := ex.deps.Config
 	itemID := rec.ItemID
+	ingestProgress(ctx, cfg.Name, "active", itemID, "", 0, 0)
 
 	cached, err := ex.deps.State.Fragments(ctx, cfg.Name, itemID)
 	if err != nil {
@@ -48,6 +49,7 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		return err
 	}
 
+	ingestProgress(ctx, cfg.Name, "stage", itemID, "enrichment", 0, 0)
 	enriched, err := enrichFragments(ctx, ex, rec)
 	if err != nil {
 		return err
@@ -73,6 +75,7 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		return err
 	}
 
+	ingestProgress(ctx, cfg.Name, "stage", itemID, "storage", 0, 0)
 	if err := upsertRows(ctx, ex, out.rows); err != nil {
 		return err
 	}
@@ -95,12 +98,14 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		Views:     out.views,
 		Refs:      resolved.Edges,
 	}
+	ingestProgress(ctx, cfg.Name, "stage", itemID, "checkpoint", 0, 0)
 	if err := ex.deps.State.CheckpointItem(ctx, cfg.Name, cp); err != nil {
 		return err
 	}
 
 	cascade(ctx, ex, itemID, resolved.Depth, len(out.rows) > 0)
 	ex.stats.addProcessed(1)
+	ingestProgress(ctx, cfg.Name, "completed", itemID, "processed", 0, 1)
 	return nil
 }
 

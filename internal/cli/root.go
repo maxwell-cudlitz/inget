@@ -10,7 +10,6 @@
 package cli
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -18,7 +17,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/maxwell-cudlitz/inget/internal/config"
-	"github.com/maxwell-cudlitz/inget/internal/logging"
+	"github.com/maxwell-cudlitz/inget/internal/progress"
 )
 
 // ConfigFlag is the persistent flag naming the base configuration file. Its default comes
@@ -69,16 +68,11 @@ func NewRoot(app App) *cobra.Command {
 			// Only the log block is read here. Commands that need the whole
 			// configuration load and validate it themselves, so a command like
 			// `version` still works where no config.yaml exists.
-			opts, err := config.LoadLog(ConfigPath(cmd))
-			if err != nil {
-				return fmt.Errorf("reading log configuration: %w", err)
-			}
-			if _, err := logging.Setup(opts); err != nil {
-				return fmt.Errorf("configuring logger: %w", err)
-			}
-			return nil
+			return configureProgress(cmd)
 		},
+		PersistentPostRun: func(cmd *cobra.Command, _ []string) { progress.Close(cmd.Context()) },
 	}
+	root.PersistentFlags().String(ProgressFlag, "auto", "progress display: auto, plain or off")
 	root.PersistentFlags().String(ConfigFlag, defaultConfigPath(), "path to the base configuration file")
 	if app.Run != nil {
 		root.Args = cobra.NoArgs
@@ -114,7 +108,9 @@ func defaultConfigPath() string {
 func Execute(app App, sub ...*cobra.Command) {
 	root := NewRoot(app)
 	root.AddCommand(sub...)
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	progress.Close(root.Context())
+	if err != nil {
 		// The logger may not exist yet if PersistentPreRunE itself failed; slog's
 		// default handler writes to stderr, which is where diagnostics belong either
 		// way.

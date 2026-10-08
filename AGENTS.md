@@ -91,7 +91,9 @@ not be a SQL database at all.
 - Errors are values. Wrap with `fmt.Errorf("doing x: %w", err)` at package boundaries.
   Never swallow. Log an error once, at the outermost handler — `cli.Execute`.
 - Logs are JSON on stderr via `log/slog`. Stdout is reserved for program data
-  (`--json` output, query results, `version`). Nothing writes log files.
+  (`--json` output, query results, `version`). Optional `--progress` human output is
+  coordinated on stderr when enabled; redirected auto mode keeps existing logs. Nothing
+  writes log files.
 - Config is layered: `config.yaml` < `config.local.yaml` < `INGET_*` env, with `__`
   expressing nesting. Secrets appear only as the *names* of environment variables
   (`token_env`, `api_key_env`, `dsn_env`), never as values. Read the whole file with

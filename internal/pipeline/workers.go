@@ -122,6 +122,7 @@ func claimLoop(ctx context.Context, ex *execution, result *reconcileResult, g *e
 // nothing more: the item wrote no guards either, so the next run retries it.
 func completeFailed(ctx context.Context, ex *execution, itemID string, cause error) {
 	ex.stats.addFailed(1)
+	ingestProgress(ctx, ex.deps.Config.Name, "completed", itemID, "failed", 0, 1)
 	if err := ex.deps.State.CompleteWork(ctx, ex.runID, ex.deps.Config.Name, itemID, cause); err != nil {
 		slog.WarnContext(ctx, "recording item failure",
 			"datatype", ex.deps.Config.Name, "item_id", itemID, "error", err)

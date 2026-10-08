@@ -110,6 +110,32 @@ For a worked version of the above against real data — 50 popular but reasonabl
 repositories, chosen with the GitHub search API, then queried both through `inget query` and
 through `curl` plus `psql` — see [`docs/local-walkthrough.md`](docs/local-walkthrough.md).
 
+### Terminal progress
+
+Fetching and ingestion show a live dashboard automatically when stderr is an interactive
+terminal. It reports discovered/finished items, active repositories and their current stages,
+skips, failures, warnings, generated views, embedding counts, and elapsed time. During source
+enumeration the total is unknown; the percentage appears after enumeration finishes.
+
+```bash
+inget-fetch --datatype github/repo --progress auto
+inget run github/repo --progress auto
+inget run github/repo --progress plain   # periodic lines without terminal escapes
+inget-fetch --datatype github/repo --progress off
+```
+
+Progress goes to stderr; reports and query results remain on stdout. Redirected stderr
+keeps existing structured logs in `auto` mode. `plain` is useful when capturing a session.
+Warnings are written between refreshes and retain normal log redaction. The panel refreshes
+once per second even while a request is waiting. Counters show work actually performed;
+generated/embedded work may still belong to an item that later fails storage or checkpointing.
+
+Ingestion shows one artifact run at a time. Resumed runs count only items actually attempted
+in this invocation; a completed pass can end below 100% if its adopted queue already contained
+done items. Failed or interrupted passes retain their status and actual counts. No ETA is
+invented while the source total is unknown. An already-running process keeps its original
+interface; rebuilt binaries enable progress on the next invocation.
+
 ### Fetching
 
 `inget-fetch` is one action, so it has no subcommand:

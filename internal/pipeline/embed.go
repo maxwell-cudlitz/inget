@@ -24,6 +24,7 @@ func embedViews(ctx context.Context, ex *execution, req viewRequest, pending []p
 	for i, p := range pending {
 		texts[i] = p.text
 	}
+	ingestProgress(ctx, cfg.Name, "stage", req.itemID, "embedding", 0, 0)
 	vectors, err := emb.Embed(ctx, texts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("embedding %d views of %s/%s: %w",
@@ -62,6 +63,7 @@ func embedViews(ctx context.Context, ex *execution, req viewRequest, pending []p
 		})
 	}
 	ex.stats.addEmbeddings(len(pending))
+	ingestProgress(ctx, cfg.Name, "count", req.itemID, "embeddings", 0, len(pending))
 	return views, rows, nil
 }
 

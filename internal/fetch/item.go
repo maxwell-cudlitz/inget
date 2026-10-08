@@ -30,26 +30,36 @@ import (
 // something that merely failed to download. An artifact or state failure is returned, because it
 // is infrastructure and every remaining item would fail the same way.
 func (r *runner) fetchItem(ctx context.Context, ref source.Ref) error {
+	r.progress(ctx, "active", ref.ID, "fetching", -1, 0)
+	outcome := "failed"
+	defer func() {
+		if outcome != "fetched" && ctx.Err() != nil {
+			outcome = "cancelled"
+		}
+		r.progress(ctx, "completed", ref.ID, outcome, -1, 1)
+	}()
 	result, err := r.deps.Connector.Fetch(ctx, r.cfg.Datatype, ref)
 	if err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
 		slog.WarnContext(ctx, "fetch failed", "datatype", r.cfg.Datatype, "item", ref.ID, "error", err.Error())
-		r.warn(fmt.Sprintf("%s: fetch failed: %s", ref.ID, err))
+		r.warn(ctx, fmt.Sprintf("%s: fetch failed: %s", ref.ID, err))
 		r.mu.Lock()
 		r.failed++
 		r.mu.Unlock()
 		return nil
 	}
 	for _, line := range result.Warnings {
-		r.warn(line)
+		r.warn(ctx, line)
 	}
 
+	r.progress(ctx, "stage", ref.ID, "storing fragments", -1, 0)
 	record, err := r.record(ctx, result)
 	if err != nil {
 		return err
 	}
+	r.progress(ctx, "stage", ref.ID, "writing artifact", -1, 0)
 	if err := r.writer.Write(ctx, record); err != nil {
 		return fmt.Errorf("writing record for %s: %w", record.ItemID, err)
 	}
@@ -58,6 +68,8 @@ func (r *runner) fetchItem(ctx context.Context, ref source.Ref) error {
 	r.items++
 	r.fragments += len(record.Fragments)
 	r.mu.Unlock()
+	r.progress(ctx, "count", ref.ID, "fragments", -1, len(record.Fragments))
+	outcome = "fetched"
 	slog.DebugContext(ctx, "fetched item",
 		"datatype", r.cfg.Datatype, "item", record.ItemID, "fragments", len(record.Fragments))
 	return nil
@@ -79,7 +91,7 @@ func (r *runner) record(ctx context.Context, result source.Result) (*artifact.Re
 	if max := r.cfg.MaxFragmentsPerItem; max > 0 && total > max {
 		fragments = fragments[:max]
 		capped = true
-		r.warn(fmt.Sprintf("%s: fragment count %d exceeded max_fragments_per_item=%d",
+		r.warn(ctx, fmt.Sprintf("%s: fragment count %d exceeded max_fragments_per_item=%d",
 			result.Item.ID, total, max))
 	}
 
@@ -123,6 +135,7 @@ func (r *runner) fragment(ctx context.Context, prior map[string]state.FragmentSt
 		r.mu.Lock()
 		r.blobsReused++
 		r.mu.Unlock()
+		r.progress(ctx, "count", "", "blobs", -1, 1)
 		return out, nil
 	}
 
@@ -142,5 +155,6 @@ func (r *runner) fragment(ctx context.Context, prior map[string]state.FragmentSt
 		r.blobsReused++
 	}
 	r.mu.Unlock()
+	r.progress(ctx, "count", "", "blobs", -1, 1)
 	return out, nil
 }

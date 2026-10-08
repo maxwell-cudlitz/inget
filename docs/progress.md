@@ -58,7 +58,7 @@ roughly 18 sessions rather than 14. Steps 1–8 need no network and no credentia
 | 13 | Edge Cases, `artifact-envelope.md` GC | 1304–1327, 263–275 |
 | 14 | Non-Goals, Repository Layout | 1430–1441, 1370–1405 |
 
-These offsets are valid for `feature-design.md` at 1467 lines. Editing that file shifts
+These offsets are valid for `feature-design.md` at 1488 lines. Editing that file shifts
 everything below the edit, so regenerate the map with
 `grep -n '^#\{2,3\} ' docs/feature-design.md` whenever the design changes.
 
@@ -1950,3 +1950,35 @@ repo returned zero fragments with the expected warning; it wrote no artifacts or
 Validation after both fetch-safety fixes: `make build test lint` passed, including the
 full race-test suite, `go vet ./...`, and golangci-lint (zero issues). Both local binaries
 were rebuilt. No full organization fetch or paid ingestion was started by this repair.
+
+
+## Terminal progress, 2026-10-07
+
+Implemented an optional command-owned terminal dashboard in `internal/progress`, wired through
+shared CLI scaffolding for both binaries. The default `--progress auto` detects interactive
+stderr, `plain` prints periodic snapshots, and `off` retains existing output. Existing local
+wrapper arguments already pass through. Fetch reports and query data remain on stdout;
+JSON/text diagnostic logs retain configured levels, destinations and secret redaction, and
+stderr logs are coordinated with the live panel. The design records the explicit human-output
+extension and promotion of two already-pinned pure-Go dependencies.
+
+Context observers receive only identities/stages and counters. Fetch shows streaming discovery,
+known totals after listing, worker activity, fetched/skipped/failed items, fragments and warning
+counts, then commit. Ingestion reports per-artifact reconciliation, active fragment/view work,
+actual generation and embedding counts, checkpointed successes and failures. Interrupted and
+cancelled work retains its status. Resumed completion counts are actual attempts, without
+forcing the ratio to 100%. No persistence, source/model request, artifact, hash, signature or
+index migration changed. Existing processes must finish/restart to use the new display.
+
+Regression tests verify real fake-source/artifact/state and pipeline boundaries, cache skips,
+failed items, checkpoint failures, dry-run inertness, enumeration totals before worker drain,
+concurrent display totals, stdout isolation, redaction, terminal-control escaping, narrow-width
+clipping and refresh cleanup. `make build test lint` passed with race detection, vet and the
+pinned linter reporting zero issues. Both binaries were rebuilt.
+
+Release verification: `make release-check` passed. `make release-snapshot` passed for
+Linux/macOS amd64/arm64 binaries and both local Docker architectures, publishing nothing.
+The Docker buildx activity directory was redirected to workspace `BUILDX_CONFIG` so the
+snapshot did not need writes under the user Docker configuration directory. A real
+GitHub metadata-only dry run through the local wrapper verified automatic TTY and plain
+progress against isolated SQLite state; JSON stdout stayed intact and models were unused.
