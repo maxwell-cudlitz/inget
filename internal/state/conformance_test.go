@@ -18,6 +18,7 @@ func conformanceCases() []storeCase {
 		itemCases,
 		fragmentCases,
 		derivationCases,
+		peekDerivationCases,
 		viewCases,
 		refCases,
 		signatureCases,

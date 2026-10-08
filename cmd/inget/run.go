@@ -24,6 +24,7 @@ type runOptions struct {
 	dryRun bool
 	only   []string
 	limit  int
+	estimateProfile string
 }
 
 // runCommand builds `inget run`.
@@ -105,6 +106,13 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 		},
 		MaxReferenceDepth: cfg.Enrich.MaxReferenceDepth,
 		MaxCascadePerRun:  cfg.Enrich.MaxCascadePerRun,
+	}
+	if opts.estimateProfile != "" {
+		profile, err := loadEstimateProfile(opts.estimateProfile)
+		if err != nil {
+			return err
+		}
+		rc.EstimateProfile = profile
 	}
 
 	plan, stats, err := pipeline.Run(ctx, deps, arts, rc)

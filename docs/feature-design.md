@@ -1186,7 +1186,7 @@ inget run [flags]
   --limit N
   --dry-run
 
-inget plan [same flags as run]     work to be done + token and cost estimate
+inget plan [--only ID] [--limit N] [--estimate-profile PATH]  work and cost estimate
 inget migrate [--destination NAME] create/upgrade state and destination schemas
 inget reindex [--datatype] [--views] [--destination]
 inget state show | gc | unlock
@@ -1195,10 +1195,10 @@ inget eval [--datatype] [--embedder ...]           quality harness (D14)
 inget version
 ```
 
-`inget plan` is the guard against silent cost blowouts: it reports how many fragment
-derivations and view generations a run would perform, the estimated input and output
-tokens, and the cost from `price_per_mtok_*`. Any signature change is surfaced here
-before spending.
+`inget plan` reports distinct uncached fragment derivations, view generations, prompt
+input allowances, maximum output tokens, and cost from `price_per_mtok_*`. Signature
+changes are surfaced before spending. An optional measured profile adds approximate
+`estimate.expected` generation cost; see [cost-estimates.md](cost-estimates.md).
 
 ---
 

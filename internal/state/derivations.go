@@ -22,6 +22,9 @@ UPDATE derivations SET last_hit_at = CURRENT_TIMESTAMP WHERE cache_key = ? RETUR
 	derivationExistsSQL = `
 SELECT 1 FROM derivations WHERE cache_key = ?`
 
+	derivationPeekSQL = `
+SELECT output FROM derivations WHERE cache_key = ?`
+
 	derivationUpsertSQL = `
 INSERT INTO derivations (cache_key, datatype, item_id, frag_key, signature, output)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -40,6 +43,16 @@ func (s *store) Derivation(ctx context.Context, cacheKey string) (string, bool, 
 	found, err := s.get(ctx, derivationHitSQL, []any{cacheKey}, &output)
 	if err != nil {
 		return "", false, fmt.Errorf("reading derivation %s: %w", cacheKey, err)
+	}
+	return output, found, nil
+}
+
+// PeekDerivation implements Store without updating the cache retention timestamp.
+func (s *store) PeekDerivation(ctx context.Context, cacheKey string) (string, bool, error) {
+	var output string
+	found, err := s.get(ctx, derivationPeekSQL, []any{cacheKey}, &output)
+	if err != nil {
+		return "", false, fmt.Errorf("peeking derivation %s: %w", cacheKey, err)
 	}
 	return output, found, nil
 }

@@ -70,6 +70,10 @@ type Store interface {
 	// its last-hit timestamp.
 	Derivation(ctx context.Context, cacheKey string) (string, bool, error)
 
+	// PeekDerivation reads cached output without touching its last-hit timestamp, so
+	// planning can compose cached text without changing cache retention.
+	PeekDerivation(ctx context.Context, cacheKey string) (string, bool, error)
+
 	// HasDerivation reports whether a derivation is cached without touching its last-hit
 	// timestamp, which is what `inget plan` needs: estimating a run's cost must not change
 	// which entries a later gc considers cold.
