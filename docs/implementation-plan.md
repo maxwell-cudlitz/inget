@@ -350,8 +350,9 @@ End-to-end acceptance for the complete feature:
 8. `inget-fetch --only <one-item> --scope partial` then `inget run`: no tombstones
    issued, no other items touched.
 9. `inget eval` passes thresholds for every configured datatype.
-10. Edit one view's prompt, `inget plan`: a signature change is surfaced with an
-    estimated cost before any spend.
+10. Edit one view's prompt: default `inget plan` surfaces the signature change without
+    widening the work set; `inget plan --rebuild-on-signature-change` estimates every live
+    item, and the matching `inget run` rebuilds only after that explicit opt-in.
 11. `SIGTERM` mid-run, then re-run: resumes and completes without duplicate work.
 12. Change the embedder model, run `inget run`: rejected with reindex guidance. Run
     `inget reindex`: index rebuilt consistently.

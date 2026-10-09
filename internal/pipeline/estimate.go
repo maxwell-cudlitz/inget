@@ -38,23 +38,34 @@ type Estimate struct {
 	Expected            *ExpectedEstimate `json:"expected,omitempty"`
 }
 
-// surfaceSignatureChanges warns about any enricher signature that no longer matches what was
-// last recorded, and records the affected scopes on the plan.
-//
-// It runs on every invocation, plan or not, because a prompt edit silently reusing cached
-// output is the failure it exists to prevent and the check costs one query per view.
-func surfaceSignatureChanges(ctx context.Context, deps Deps, result *reconcileResult) error {
+// surfaceSignatureChanges reports changed scopes. Expanding work to every live item is
+// explicit because prompt and model changes can trigger a costly full re-enrichment.
+func surfaceSignatureChanges(ctx context.Context, deps Deps, rc RunConfig, result *reconcileResult) error {
 	changed, err := changedSignatures(ctx, deps)
 	if err != nil {
 		return err
 	}
 	result.plan.Estimate.ChangedSignatures = changed
 	if len(changed) > 0 {
-		// The affected count is every live item, because a signature is part of every one of
-		// their cache keys.
-		slog.WarnContext(ctx, "enricher signature changed, cached derivations and views are invalid",
-			"datatype", deps.Config.Name, "scopes", changed, "items_affected", result.plan.TotalItems)
+		slog.WarnContext(ctx, "enricher signature changed; full rebuild is opt-in",
+			"datatype", deps.Config.Name, "scopes", changed, "items_affected", result.plan.TotalItems,
+			"rebuild_enabled", rc.RebuildOnSignatureChange)
 	}
+	if len(changed) == 0 || !rc.RebuildOnSignatureChange {
+		return nil
+	}
+	if !result.fullScope {
+		return fmt.Errorf("--rebuild-on-signature-change requires a full-scope artifact run for %s", deps.Config.Name)
+	}
+	candidates := make([]string, 0, len(result.records))
+	for itemID := range result.records {
+		candidates = append(candidates, itemID)
+	}
+	result.plan.WorkItems, result.partial = selectWork(candidates, rc)
+	result.plan.Restricted = result.partial
+	result.rebuild = true
+	slog.InfoContext(ctx, "rebuilding items for changed enricher signatures",
+		"datatype", deps.Config.Name, "items", len(result.plan.WorkItems), "scopes", changed)
 	return nil
 }
 
@@ -87,7 +98,7 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 		if !ok {
 			continue
 		}
-		if err := estimateItem(ctx, deps, rc, rec, frags, &est); err != nil {
+		if err := estimateItem(ctx, deps, rc, rec, frags, result.rebuild, &est); err != nil {
 			return err
 		}
 	}
@@ -117,7 +128,7 @@ type fragEstimate struct {
 }
 
 // estimateItem adds one item's derivations and view generations to est.
-func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Record, frags fragEstimate, est *Estimate) error {
+func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Record, frags fragEstimate, forceViews bool, est *Estimate) error {
 	cfg := deps.Config
 	if frags.seen == nil {
 		frags.seen = make(map[string]bool)
@@ -168,7 +179,7 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 	}
 
 	for _, view := range cfg.Views {
-		if len(view.DependsOn) > 0 && delta.ViewSkippable(changed, view.DependsOn) {
+		if !forceViews && len(view.DependsOn) > 0 && delta.ViewSkippable(changed, view.DependsOn) {
 			continue
 		}
 		scoped := scopedBytes(rec, view.DependsOn)

@@ -33,5 +33,7 @@ func planCommand() *cobra.Command {
 	cmd.Flags().StringSliceVar(&opts.only, "only", nil, "restrict the plan to these item IDs")
 	cmd.Flags().IntVar(&opts.limit, "limit", 0, "plan at most N changed items")
 	cmd.Flags().StringVar(&opts.estimateProfile, "estimate-profile", "", "JSON usage profile for an additional expected cost estimate")
+	cmd.Flags().BoolVar(&opts.rebuildOnSignatureChange, "rebuild-on-signature-change", false,
+		"include every item in the plan when a prompt or enricher signature has changed")
 	return cmd
 }

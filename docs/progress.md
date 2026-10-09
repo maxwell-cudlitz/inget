@@ -2033,3 +2033,18 @@ row hashes of all nine operational state tables, including cache timestamps and 
 consumption marker, were unchanged; the vector count stayed 98. No model requests or
 new paid inference occurred. The local binary was rebuilt after an initial wrapper
 invocation exposed the flag before integration had finished.
+
+## Bounded local search terms and opt-in signature rebuild, 2026-10-08
+
+The local GitHub prompt now asks for at most 12 concise, grounded search phrases and
+the nine prompts used by the local config each include three short output examples.
+Reranking uses a local prompt copy, leaving the shared prompt untouched. The local
+estimate wrapper detects a stale prompt-signature profile and falls back to the native
+allowance with a warning; the old profile is not relabeled as calibrated.
+
+Prompt and enricher signature changes remain visible by default without expanding the
+item-delta work set. `plan` and `run` now accept `--rebuild-on-signature-change` to
+explicitly include every live item from a full-scope artifact. The planner accounts for
+that work; restricted or failed rebuilds do not record changed signatures. A resumed
+opt-in rebuild replaces its old queue so previously completed items are checked against
+the new signatures. The D2 design and CLI docs now match this opt-in behavior.

@@ -65,7 +65,7 @@ func processItem(ctx context.Context, ex *execution, rec *artifact.Record) error
 		itemID:      itemID,
 		entries:     entries,
 		changedKeys: append(changedKeys(fragDelta), resolved.ChangedKeys...),
-		anyChanged:  resolved.MetadataChanged,
+		anyChanged:  resolved.MetadataChanged || ex.forceViews,
 		refDigest:   resolved.Digest,
 		metadata:    annotateMetadata(cfg, rec, resolved),
 		relatedKeys: resolved.RelatedKeys,

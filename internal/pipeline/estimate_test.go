@@ -18,7 +18,7 @@ func estimateFor(t *testing.T, h *cascadeHarness, frags fragEstimate, views []co
 	t.Helper()
 	h.deps.Config.Views = views
 	var est Estimate
-	if err := estimateItem(h.ctx, h.deps, h.runConfig(), rec, frags, &est); err != nil {
+	if err := estimateItem(h.ctx, h.deps, h.runConfig(), rec, frags, false, &est); err != nil {
 		t.Fatalf("estimating: %v", err)
 	}
 	return est

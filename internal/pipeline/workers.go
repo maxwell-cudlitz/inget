@@ -30,6 +30,7 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 		gen:         newLimiter(rc.Concurrency),
 		derive:      &singleflight.Group{},
 		concurrency: max(rc.Concurrency, 1),
+		forceViews:  result.rebuild,
 		refDepth:    rc.MaxReferenceDepth,
 		changed:     result.changed,
 		stats:       stats,
@@ -62,7 +63,14 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 	if err := deps.State.FinishRun(ctx, runID, status, final); err != nil {
 		return nil, fmt.Errorf("finishing run %s: %w", runID, err)
 	}
-	recordSignatures(ctx, deps)
+	if len(result.plan.Estimate.ChangedSignatures) > 0 &&
+		(!result.rebuild || result.partial || final.ItemsFailed > 0 || ShuttingDown(ctx)) {
+		slog.InfoContext(ctx, "leaving changed enricher signatures unrecorded until a full rebuild succeeds",
+			"datatype", cfg.Name, "rebuild_enabled", result.rebuild, "restricted", result.partial,
+			"failed_items", final.ItemsFailed)
+	} else {
+		recordSignatures(ctx, deps)
+	}
 	slog.InfoContext(ctx, "pipeline complete",
 		"datatype", cfg.Name, "status", status,
 		"processed", final.ItemsProcessed, "failed", final.ItemsFailed,

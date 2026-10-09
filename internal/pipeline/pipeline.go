@@ -53,14 +53,15 @@ type DatatypeConfig struct {
 
 // RunConfig controls pipeline execution behaviour.
 type RunConfig struct {
-	Binary          string           // binary name for the run record
-	Concurrency     int              // generator permits and worker slots; from models.generator.concurrency
-	ConfigHash      string           // for resumption matching
-	DryRun          bool             // plan mode: compute work and estimate cost, execute nothing
-	Only            []string         // restrict the work set to these item IDs; empty means all
-	Limit           int              // cap the work set; 0 means uncapped
-	Pricing         Pricing          // what plan mode multiplies its token estimate by
-	EstimateProfile *EstimateProfile // optional measured stage model, used only by plan
+	Binary                   string           // binary name for the run record
+	Concurrency              int              // generator permits and worker slots; from models.generator.concurrency
+	ConfigHash               string           // for resumption matching
+	DryRun                   bool             // plan mode: compute work and estimate cost, execute nothing
+	Only                     []string         // restrict the work set to these item IDs; empty means all
+	Limit                    int              // cap the work set; 0 means uncapped
+	RebuildOnSignatureChange bool             // opt in to processing every live item after an enricher signature change
+	Pricing                  Pricing          // what plan mode multiplies its token estimate by
+	EstimateProfile          *EstimateProfile // optional measured stage model, used only by plan
 	// MaxReferenceDepth and MaxCascadePerRun bound the reference invalidation cascade
 	// (enrich.*, D12). They are run settings rather than datatype settings because a cascade
 	// crosses datatypes: the record that changed and the item that referenced it are
@@ -131,6 +132,7 @@ type execution struct {
 	derive      *singleflight.Group // collapses concurrent derivations of one fragment
 	concurrency int                 // goroutines per fan-out stage
 	fragSig     string              // fragment enricher signature; "" when disabled
+	forceViews  bool                // bypass level-1 view skips for an opted-in signature rebuild
 	refDepth    int                 // enrich.max_reference_depth; bounds the cascade
 	// changed is the items this run picked up because their own content moved, as opposed to
 	// the ones a reference invalidated. It decides whether processing an item cascades: an

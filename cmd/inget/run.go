@@ -21,10 +21,11 @@ import (
 
 // runOptions are the flags run and plan share.
 type runOptions struct {
-	dryRun          bool
-	only            []string
-	limit           int
-	estimateProfile string
+	dryRun                   bool
+	only                     []string
+	limit                    int
+	estimateProfile          string
+	rebuildOnSignatureChange bool
 }
 
 // runCommand builds `inget run`.
@@ -46,6 +47,8 @@ func runCommand() *cobra.Command {
 	cmd.Flags().StringSliceVar(&opts.only, "only", nil, "restrict processing to these item IDs")
 	cmd.Flags().IntVar(&opts.limit, "limit", 0, "process at most N changed items")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "report the work and its estimated cost without doing it")
+	cmd.Flags().BoolVar(&opts.rebuildOnSignatureChange, "rebuild-on-signature-change", false,
+		"explicitly process every item when a prompt or enricher signature has changed")
 	return cmd
 }
 
@@ -96,12 +99,13 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 
 	gen := cfg.Models.Generator
 	rc := pipeline.RunConfig{
-		Binary:      "inget",
-		Concurrency: gen.Concurrency,
-		ConfigHash:  configHash,
-		DryRun:      opts.dryRun,
-		Only:        opts.only,
-		Limit:       opts.limit,
+		Binary:                   "inget",
+		Concurrency:              gen.Concurrency,
+		ConfigHash:               configHash,
+		DryRun:                   opts.dryRun,
+		Only:                     opts.only,
+		Limit:                    opts.limit,
+		RebuildOnSignatureChange: opts.rebuildOnSignatureChange,
 		Pricing: pipeline.Pricing{
 			PerMTokIn:       gen.PricePerMTokIn,
 			PerMTokOut:      gen.PricePerMTokOut,
