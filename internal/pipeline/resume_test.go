@@ -3,8 +3,11 @@
 package pipeline
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
@@ -152,5 +155,111 @@ func TestPlanReportsSignatureChange(t *testing.T) {
 	want := testDatatype + ":view:role"
 	if len(plan.Estimate.ChangedSignatures) != 1 || plan.Estimate.ChangedSignatures[0] != want {
 		t.Errorf("changed signatures = %v, want [%s]", plan.Estimate.ChangedSignatures, want)
+	}
+	if len(plan.WorkItems) != 0 {
+		t.Errorf("default plan work items = %v, want no full rebuild", plan.WorkItems)
+	}
+}
+
+// TestSignatureRebuildIsExplicit verifies that a changed prompt is reported but does not widen
+// the default work set; the explicit flag plans and processes every live item.
+func TestSignatureRebuildIsExplicit(t *testing.T) {
+	h := newCascadeHarness(t)
+	items := []string{"owner/one", "owner/two"}
+	h.writeRunWithItems(baseVersion, noChange, "", items...)
+	if _, _, err := h.run(); err != nil {
+		t.Fatalf("initial run: %v", err)
+	}
+
+	replaceViewPrompt(t, h, "role", "Generate role differently: {{.Document}}")
+	h.writeRunWithItems(baseVersion, noChange, "", items...)
+	h.reset()
+
+	defaultPlan, err := h.plan()
+	if err != nil {
+		t.Fatalf("default plan: %v", err)
+	}
+	if len(defaultPlan.WorkItems) != 0 || len(defaultPlan.Estimate.ChangedSignatures) != 1 {
+		t.Fatalf("default plan = work %v, changed signatures %v; want no work and one changed signature",
+			defaultPlan.WorkItems, defaultPlan.Estimate.ChangedSignatures)
+	}
+	_, stats, err := h.run()
+	if err != nil {
+		t.Fatalf("default run: %v", err)
+	}
+	if stats.ItemsProcessed != 0 || h.gen.Calls() != 0 {
+		t.Errorf("default run processed %d items with %d generator calls, want 0 and 0",
+			stats.ItemsProcessed, h.gen.Calls())
+	}
+
+	partial := h.runConfig()
+	partial.RebuildOnSignatureChange = true
+	partial.Only = []string{items[0]}
+	_, partialStats, err := Run(h.ctx, h.deps, h.arts, partial)
+	if err != nil {
+		t.Fatalf("limited rebuild: %v", err)
+	}
+	if partialStats.ItemsProcessed != 1 || partialStats.ItemsFailed != 0 {
+		t.Fatalf("limited rebuild stats = %+v, want one successful item", partialStats)
+	}
+	h.reset()
+	stillChanged, err := h.plan()
+	if err != nil {
+		t.Fatalf("plan after limited rebuild: %v", err)
+	}
+	if len(stillChanged.Estimate.ChangedSignatures) != 1 {
+		t.Fatalf("limited rebuild recorded signature early: %v", stillChanged.Estimate.ChangedSignatures)
+	}
+
+	rc := h.runConfig()
+	rc.DryRun = true
+	rc.RebuildOnSignatureChange = true
+	fullPlan, _, err := Run(h.ctx, h.deps, h.arts, rc)
+	if err != nil {
+		t.Fatalf("rebuild plan: %v", err)
+	}
+	if !slices.Equal(fullPlan.WorkItems, items) || !slices.Equal(fullPlan.Estimate.ChangedSignatures, []string{testDatatype + ":view:role"}) {
+		t.Fatalf("rebuild plan work/signatures = %v / %v", fullPlan.WorkItems, fullPlan.Estimate.ChangedSignatures)
+	}
+
+	rc.DryRun = false
+	h.reset()
+	_, stats, err = Run(h.ctx, h.deps, h.arts, rc)
+	if err != nil {
+		t.Fatalf("explicit rebuild: %v", err)
+	}
+	if stats.ItemsProcessed != len(items) || stats.ItemsFailed != 0 {
+		t.Errorf("explicit rebuild stats = %+v, want %d processed and no failures", stats, len(items))
+	}
+	if h.gen.Calls() != 1 {
+		t.Errorf("explicit rebuild generator calls = %d, want one remaining changed view", h.gen.Calls())
+	}
+
+	h.reset()
+	cleanPlan, err := h.plan()
+	if err != nil {
+		t.Fatalf("post-rebuild plan: %v", err)
+	}
+	if len(cleanPlan.WorkItems) != 0 || len(cleanPlan.Estimate.ChangedSignatures) != 0 {
+		t.Errorf("post-rebuild plan work/signatures = %v / %v, want none",
+			cleanPlan.WorkItems, cleanPlan.Estimate.ChangedSignatures)
+	}
+}
+
+func TestSignatureRebuildRejectsPartialArtifact(t *testing.T) {
+	h := newCascadeHarness(t)
+	h.writeRun(baseVersion, noChange, "")
+	if _, _, err := h.run(); err != nil {
+		t.Fatalf("initial run: %v", err)
+	}
+	replaceViewPrompt(t, h, "role", "Generate role differently: {{.Document}}")
+	h.scope = artifact.ScopePartial
+	h.writeRun(baseVersion, noChange, "")
+
+	rc := h.runConfig()
+	rc.DryRun = true
+	rc.RebuildOnSignatureChange = true
+	if _, _, err := Run(h.ctx, h.deps, h.arts, rc); err == nil || !strings.Contains(err.Error(), "requires a full-scope artifact") {
+		t.Fatalf("partial artifact rebuild error = %v, want full-scope guard", err)
 	}
 }

@@ -158,21 +158,27 @@ for a stale cache to hide. Mitigated by D2.
 
 **Decision.** Every cache key includes a `Signature()` covering the complete input
 set: model ID, exact prompt template bytes, truncation limits, enricher options, and
-envelope schema version. Signatures are persisted in `signatures`. When a signature
-changes, the affected caches are invalidated and the run logs a `WARN` with the count
-of items that will be re-enriched and the estimated cost.
+envelope schema version. Signatures are persisted in `signatures`. A changed signature is
+reported by `inget plan` and `inget run`, but default runs keep their item-delta work set.
+Only `--rebuild-on-signature-change` widens the work set to every live item in a full-scope
+artifact; `inget plan` estimates that opt-in rebuild before it is run. The signature is
+recorded only after an unrestricted rebuild succeeds, so a failed or limited pass remains
+detectable and can be retried.
 
 **Rationale.** This is the single most common failure in content-addressed pipelines.
 Keying a per-fragment summary on the git blob SHA alone omits the prompt and the model
 from the key, so editing the prompt or switching models leaves every cached summary
-permanently stale with no signal that anything is wrong. Turborepo's documented failure
+permanently stale with no signal that anything is wrong. The prompt/model signature remains
+part of every cache key, and the signature-change warning makes stale output visible; the
+operator chooses when to pay for updating unchanged items. Turborepo's documented failure
 mode is identical: "a variable that is not declared is simply not part of the hash, and
 that single fact explains most of the [cache miss] failures." Bazel calls the property
 hermeticity and treats undeclared inputs as a correctness bug rather than an
 optimization gap.
 
-**Trade-offs.** Prompt edits trigger mass re-enrichment, which is expensive. That is
-the correct behavior; the mitigation is visibility (`inget plan`) rather than silence.
+**Trade-offs.** Prompt edits can trigger mass re-enrichment, which is expensive. The default
+avoids widening work automatically; the explicit flag opts into that cost after `inget plan`
+shows the rebuild estimate.
 
 **Reference.**
 - https://computingforgeeks.com/turborepo-cache-misses-environment-variables/
@@ -1323,7 +1329,7 @@ references, and the view name.
 | Fragment absent for several runs | `missing_runs` counter; derivations dropped after a grace period by `state gc`. |
 | Blob store eventual consistency | Content addressing makes reads idempotent; `HasBlob` false negatives only cost a redundant upload. |
 | Clock skew on `updated_at` fingerprints | Fingerprints are compared for inequality, never ordered; a skewed timestamp causes a redundant fetch, never a skipped change. |
-| Cost blowout | `inget plan` reports estimated tokens and cost before any spend; signature changes are surfaced there. |
+| Cost blowout | `inget plan` reports estimated tokens and cost before any spend; full signature rebuilds require `--rebuild-on-signature-change`. |
 
 ### Security considerations
 

@@ -34,6 +34,13 @@ It changes reporting only: signatures, cache keys, generation and ingestion
 configuration are unaffected. Planning reads cached outputs without touching their
 last-hit timestamps. No profile means the normal allowance alone is reported.
 
+Signature changes do not widen the default run. To price and explicitly opt into
+reprocessing every live item from a full-scope artifact, add
+`--rebuild-on-signature-change` to both `inget plan` and `inget run`. A partial or
+limited pass does not acknowledge the new signature; the full rebuild must succeed
+before it is recorded. Profiles calibrated under the old prompts remain invalid and
+must be recalibrated before they can provide `estimate.expected` again.
+
 A profile is one JSON object, version 1, with exactly the configured view names:
 
 ```json

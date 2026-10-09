@@ -159,7 +159,7 @@ func planOnly(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig
 	if err != nil {
 		return nil, err
 	}
-	if err := surfaceSignatureChanges(ctx, deps, result); err != nil {
+	if err := surfaceSignatureChanges(ctx, deps, rc, result); err != nil {
 		return nil, err
 	}
 	if !rc.DryRun {
@@ -187,6 +187,14 @@ func resolveRun(ctx context.Context, deps Deps, rc RunConfig, result *reconcileR
 		}
 		if reset > 0 {
 			slog.InfoContext(ctx, "reset abandoned claims", "count", reset)
+		}
+		if result.rebuild {
+			// An explicit signature rebuild must revisit items completed under the previous
+			// prompt or model, including after an interrupted rebuild.
+			if err := deps.State.ReplaceWork(ctx, existing, cfg.Name, result.plan.WorkItems); err != nil {
+				return "", false, fmt.Errorf("replacing work for signature rebuild %s: %w", existing, err)
+			}
+			return existing, true, nil
 		}
 		// Re-enqueue the work items (idempotent: already-done items are untouched).
 		if err := deps.State.EnqueueWork(ctx, existing, cfg.Name, result.plan.WorkItems); err != nil {

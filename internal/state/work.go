@@ -16,6 +16,8 @@ const (
 INSERT INTO work (run_id, datatype, item_id, status) VALUES (?, ?, ?, '` + WorkPending + `')
 ON CONFLICT (run_id, datatype, item_id) DO NOTHING`
 
+	workDeleteRunSQL = `DELETE FROM work WHERE run_id = ? AND datatype = ?`
+
 	// The subquery selects the batch and the outer UPDATE claims it, so selecting and
 	// claiming cannot interleave with another worker. On PostgreSQL the row locking
 	// clause makes a concurrent claimer skip these rows rather than block on them; on
@@ -53,6 +55,25 @@ func (s *store) EnqueueWork(ctx context.Context, runID, datatype string, ids []s
 	})
 	if err != nil {
 		return fmt.Errorf("enqueueing %d %s items in run %s: %w", len(ids), datatype, runID, err)
+	}
+	return nil
+}
+
+// ReplaceWork implements Store. A caller must hold the datatype lock because replacing a
+// queue discards its previous item statuses and is valid only for an explicit full rebuild.
+func (s *store) ReplaceWork(ctx context.Context, runID, datatype string, ids []string) error {
+	rows := make([][]any, 0, len(ids))
+	for _, id := range ids {
+		rows = append(rows, []any{runID, datatype, id})
+	}
+	err := s.inTx(ctx, func(t tx) error {
+		if err := t.exec(ctx, workDeleteRunSQL, runID, datatype); err != nil {
+			return err
+		}
+		return t.execMany(ctx, workEnqueueSQL, rows)
+	})
+	if err != nil {
+		return fmt.Errorf("replacing %d %s items in run %s: %w", len(ids), datatype, runID, err)
 	}
 	return nil
 }

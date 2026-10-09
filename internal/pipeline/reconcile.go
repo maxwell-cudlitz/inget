@@ -21,6 +21,8 @@ type reconcileResult struct {
 	plan       Plan
 	tombstones []string
 	partial    bool                        // the run saw a subset of items, so absence proves nothing
+	fullScope  bool                        // the producer enumerated a full artifact, not a partial submission
+	rebuild    bool                        // an explicit signature-change rebuild is in effect
 	records    map[string]*artifact.Record // itemID → record for processing
 	// changed is the items whose own content moved, as opposed to the ones a reference
 	// invalidated. Only the former cascade unconditionally; see processItem.
@@ -109,6 +111,7 @@ func reconcile(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfi
 		},
 		tombstones: tombstones,
 		partial:    partial,
+		fullScope:  run.Manifest.Scope == artifact.ScopeFull,
 		records:    records,
 		changed:    changed,
 	}, nil

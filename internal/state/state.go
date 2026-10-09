@@ -156,6 +156,10 @@ type Store interface {
 	// so re-enqueueing on resume preserves what is already done.
 	EnqueueWork(ctx context.Context, runID, datatype string, ids []string) error
 
+	// ReplaceWork atomically replaces a run's queue. It is reserved for an explicit full
+	// signature rebuild that must revisit completed work from an interrupted older pass.
+	ReplaceWork(ctx context.Context, runID, datatype string, ids []string) error
+
 	// ClaimWork claims up to n pending items for exclusive processing and returns their
 	// IDs in ascending order. Concurrent callers never receive the same item.
 	ClaimWork(ctx context.Context, runID, datatype string, n int) ([]string, error)

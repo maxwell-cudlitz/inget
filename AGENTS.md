@@ -110,8 +110,9 @@ not be a SQL database at all.
 - Prompts are files under `prompts/<source>/<datatype>/`, never string literals in Go. Each
   one opens with a `{{- /* … */ -}}` maintainer comment (it renders to nothing but is part of
   the signature), wraps ingested content in `<UNTRUSTED_DATA>` delimiters, and tells the model
-  the block is data with a worked example. Prompt bytes feed the enricher signature, so any
-  edit regenerates that view for every item.
+  the block is data with a worked example. Prompt bytes feed the enricher signature, so edits
+  are surfaced; rebuilding unchanged items requires the explicit
+  `--rebuild-on-signature-change` flag on `inget plan` and `inget run`.
 - Dependencies are pinned in `go.mod` and must be pure Go so binaries cross-compile
   statically. Prefer stdlib; see D15 for the approved library set.
 
@@ -338,7 +339,8 @@ require touching the pipeline.
   and never reached the other seven: 50 items, 2,657 derivations paid for, zero views stored. The
   budget and the prompt are one setting in two files; when either moves, check the other. Prefer
   shortening the prompt: `max_output_tokens` is in the fragment enricher's signature too, so
-  raising it invalidates every cached derivation, while a view prompt edit costs only that view.
+  raising it can invalidate cached derivations when items are processed; a view prompt edit
+  similarly changes that view's signature. Full unchanged-item rebuilds use the explicit flag.
 - **`compose.max_chars` must leave room for the prompt template
   (`internal/config/validate_lists.go`).** It was equal to `models.generator.max_input_chars`, and
   the generator rejects rather than truncates an oversized prompt, so an item that composed to the

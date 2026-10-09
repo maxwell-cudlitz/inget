@@ -91,6 +91,24 @@ var workCases = []storeCase{
 		},
 	},
 	{
+		name: "replacing a queue removes old statuses and enqueues the exact new set",
+		run: func(t *testing.T, h harness) {
+			ctx := t.Context()
+			enqueued(t, h)
+			claimed := claim(t, h, 2)
+			if err := h.CompleteWork(ctx, firstRun, testDatatype, claimed[0], nil); err != nil {
+				t.Fatalf("CompleteWork: %v", err)
+			}
+			want := []string{"item-new", "item-c"}
+			if err := h.ReplaceWork(ctx, firstRun, testDatatype, want); err != nil {
+				t.Fatalf("ReplaceWork: %v", err)
+			}
+			if got := claim(t, h, 10); !slices.Equal(got, []string{"item-c", "item-new"}) {
+				t.Errorf("claim after ReplaceWork = %v, want [item-c item-new]", got)
+			}
+		},
+	},
+	{
 		name: "failed work stays failed rather than retrying forever",
 		run: func(t *testing.T, h harness) {
 			ctx := t.Context()

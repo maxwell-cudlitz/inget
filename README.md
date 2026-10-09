@@ -313,8 +313,17 @@ pass it deletes the rows the new embedder never wrote — views you removed from
 deleted while the old model was bound. A datatype with no stored views prunes nothing and
 says so: an empty state is a reason to run `inget run`, not a reason to empty the index.
 
-A prompt change is *not* a reindex. `inget run` regenerates a view whose enricher signature
-moved, and `inget plan` prices that before anything is spent.
+A prompt change is *not* a reindex. A default `inget run` reports changed enricher signatures
+but preserves its ordinary item-delta work set. To explicitly plan and rebuild every item in
+a full-scope artifact under the changed prompt or enricher settings, use:
+
+```bash
+inget plan github/repo --rebuild-on-signature-change
+inget run github/repo --rebuild-on-signature-change
+```
+
+The plan prices the broader work before generation. A limited pass does not record the new
+signature, so the remaining work stays detectable for a later full rebuild.
 
 **Storage grows.** `inget state gc` performs the three-phase collection: run directories past
 `retention.runs` except the latest committed one, blobs no retained run and no live fragment
