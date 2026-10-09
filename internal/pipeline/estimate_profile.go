@@ -44,7 +44,7 @@ type ExpectedEstimate struct {
 	Exclusions      []string       `json:"exclusions"`
 }
 
-func validateEstimateProfile(p *EstimateProfile, deps Deps, pricing Pricing) error {
+func validateEstimateProfile(p *EstimateProfile, deps Deps, rc RunConfig) error {
 	if p == nil {
 		return nil
 	}
@@ -56,7 +56,7 @@ func validateEstimateProfile(p *EstimateProfile, deps Deps, pricing Pricing) err
 		if p.Fragment == nil {
 			return fmt.Errorf("estimate profile requires a fragment stage")
 		}
-		if err := validateStageProfile("fragment", *p.Fragment, deps.FragEnricher.Signature(), pricing); err != nil {
+		if err := validateStageProfile("fragment", *p.Fragment, deps.FragEnricher.Signature(), rc.Pricing); err != nil {
 			return err
 		}
 		if p.Fragment.OutputChars <= 0 {
@@ -74,7 +74,7 @@ func validateEstimateProfile(p *EstimateProfile, deps Deps, pricing Pricing) err
 		if !ok || enricher == nil {
 			return fmt.Errorf("estimate profile requires configured view %s", view.Name)
 		}
-		if err := validateStageProfile("view "+view.Name, stage, enricher.Signature(), pricing); err != nil {
+		if err := validateStageProfile("view "+view.Name, stage, enricher.Signature(), rc.viewPricing()); err != nil {
 			return err
 		}
 	}
@@ -116,9 +116,11 @@ func finiteNonNegative(value float64) bool {
 	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-func (e *ExpectedEstimate) add(stage StageProfile, chars float64) {
-	e.InputTokens += stage.InputTokenIntercept + stage.InputTokensPerChar*chars
+func (e *ExpectedEstimate) add(stage StageProfile, chars float64, pricing Pricing) {
+	input := stage.InputTokenIntercept + stage.InputTokensPerChar*chars
+	e.InputTokens += input
 	e.OutputTokens += stage.OutputTokens
+	e.CostUSD += pricing.cost(input, stage.OutputTokens)
 }
 
 // currentSignatures returns the signature of every enricher scope this datatype uses, keyed

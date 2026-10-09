@@ -35,5 +35,11 @@ func planCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.estimateProfile, "estimate-profile", "", "JSON usage profile for an additional expected cost estimate")
 	cmd.Flags().BoolVar(&opts.rebuildOnSignatureChange, "rebuild-on-signature-change", false,
 		"include every item in the plan when a prompt or enricher signature has changed")
+	cmd.Flags().BoolVar(&opts.cachedFragmentsOnly, "cached-fragments-only", false,
+		"require matching cached file summaries; fail if any selected fragment needs generation")
+	cmd.Flags().BoolVar(&opts.indexedOnly, "indexed-only", false,
+		"restrict the plan to previously indexed items; intersect --only before --limit")
+	cmd.Flags().StringSliceVar(&opts.cachedFragmentSignatures, "cached-fragment-signatures", nil,
+		"ordered historical fragment signatures allowed with --cached-fragments-only; prefer the current signature")
 	return cmd
 }

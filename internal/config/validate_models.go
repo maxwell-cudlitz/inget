@@ -8,6 +8,9 @@ import "github.com/maxwell-cudlitz/inget/internal/model"
 // validateModels checks model clients and the embedding truncation relationship.
 func (c *Config) validateModels(v *validator) {
 	v.generation("models.generator", c.Models.Generator)
+	if c.Models.HasViewGenerator() {
+		v.generation("models.view_generator", c.Models.ViewGenerator)
+	}
 	r := c.Models.Reranker
 	if c.Query.Rerank.Enabled || r.Driver != "" || r.Model != "" || r.BaseURL != "" {
 		v.generation("models.reranker", r)

@@ -45,6 +45,12 @@ func surfaceSignatureChanges(ctx context.Context, deps Deps, rc RunConfig, resul
 	if err != nil {
 		return err
 	}
+	if rc.RebuildOnSignatureChange {
+		changed, err = includeUnrecordedSignatures(ctx, deps, changed)
+		if err != nil {
+			return err
+		}
+	}
 	result.plan.Estimate.ChangedSignatures = changed
 	if len(changed) > 0 {
 		slog.WarnContext(ctx, "enricher signature changed; full rebuild is opt-in",
@@ -63,6 +69,9 @@ func surfaceSignatureChanges(ctx context.Context, deps Deps, rc RunConfig, resul
 	}
 	result.plan.WorkItems, result.partial = selectWork(candidates, rc)
 	result.plan.Restricted = result.partial
+	if result.partial {
+		result.tombstones, result.plan.Tombstones, result.plan.Deleted = nil, nil, 0
+	}
 	result.rebuild = true
 	slog.InfoContext(ctx, "rebuilding items for changed enricher signatures",
 		"datatype", deps.Config.Name, "items", len(result.plan.WorkItems), "scopes", changed)
@@ -78,7 +87,7 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 	cfg := deps.Config
 	est := result.plan.Estimate
 	est.UpperBound = true
-	if err := validateEstimateProfile(rc.EstimateProfile, deps, rc.Pricing); err != nil {
+	if err := validateEstimateProfile(rc.EstimateProfile, deps, rc); err != nil {
 		return err
 	}
 	if rc.EstimateProfile != nil {
@@ -103,11 +112,7 @@ func estimateWork(ctx context.Context, deps Deps, rc RunConfig, result *reconcil
 		}
 	}
 
-	est.CostUSD = float64(est.InputTokens)/1e6*rc.Pricing.PerMTokIn +
-		float64(est.OutputTokens)/1e6*rc.Pricing.PerMTokOut
 	if est.Expected != nil {
-		est.Expected.CostUSD = est.Expected.InputTokens/1e6*rc.Pricing.PerMTokIn +
-			est.Expected.OutputTokens/1e6*rc.Pricing.PerMTokOut
 		if !finiteNonNegative(est.Expected.InputTokens) || !finiteNonNegative(est.Expected.OutputTokens) ||
 			!finiteNonNegative(est.Expected.CostUSD) {
 			return fmt.Errorf("estimate profile produced a non-finite cost or token estimate")
@@ -156,13 +161,26 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 		if _, seen := frags.seen[key]; seen {
 			continue
 		}
-		hit, err := deps.State.HasDerivation(ctx, key)
+		var allowed []string
+		if rc.CachedFragmentsOnly {
+			allowed = rc.CachedFragmentSignatures
+		}
+		cachedKey, hit, err := cachedFragmentKey(ctx, deps.State, frag, frags.sig, allowed)
 		if err != nil {
 			return fmt.Errorf("checking derivation cache for %s/%s: %w", cfg.Name, frag.Key, err)
 		}
 		frags.seen[key] = hit
+		if !hit {
+			cachedKey = key
+		}
 		if est.Expected != nil {
-			if err := expectedFragment(ctx, deps, rc.EstimateProfile, frag, frags, key, hit, est.Expected); err != nil {
+			if err := expectedFragment(ctx, deps, rc.EstimateProfile, frag, frags, cachedKey, hit, rc.Pricing, est.Expected); err != nil {
+				return err
+			}
+			frags.chars[key] = frags.chars[cachedKey]
+		} else if rc.CachedFragmentsOnly && hit {
+			frags.chars[key], err = cachedFragmentChars(ctx, deps, frag, cachedKey)
+			if err != nil {
 				return err
 			}
 		}
@@ -174,8 +192,7 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 			return err
 		}
 		est.FragmentDerivations++
-		est.InputTokens += tokensForChars(chars)
-		est.OutputTokens += rc.Pricing.MaxOutputTokens
+		est.addTokens(tokensForChars(chars), rc.Pricing)
 	}
 
 	for _, view := range cfg.Views {
@@ -183,6 +200,9 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 			continue
 		}
 		scoped := scopedBytes(rec, view.DependsOn)
+		if rc.CachedFragmentsOnly {
+			scoped = int(composedEstimateChars(rec, view.DependsOn, frags))
+		}
 		if scoped == 0 {
 			continue
 		}
@@ -191,10 +211,9 @@ func estimateItem(ctx context.Context, deps Deps, rc RunConfig, rec *artifact.Re
 			return err
 		}
 		est.ViewGenerations++
-		est.InputTokens += tokensForChars(boundChars(scoped, cfg.ComposeMaxChars) + int(wrapper))
-		est.OutputTokens += rc.Pricing.MaxOutputTokens
+		est.addTokens(tokensForChars(boundChars(scoped, cfg.ComposeMaxChars)+int(wrapper)), rc.viewPricing())
 		if est.Expected != nil {
-			if err := expectedView(deps, rc.EstimateProfile, rec, view, frags, est.Expected); err != nil {
+			if err := expectedView(deps, rc.EstimateProfile, rec, view, frags, rc.viewPricing(), est.Expected); err != nil {
 				return err
 			}
 		}
@@ -211,9 +230,7 @@ func boundChars(chars, max int) int {
 	return min(chars, max)
 }
 
-// scopedBytes sums the sizes of the fragments a view depends on. An empty dependsOn depends
-// on the whole item. Fragments with no stored content are skipped: composition drops them, so
-// they are not part of any prompt.
+// scopedBytes sums stored fragments in a view's scope; empty dependsOn covers the whole item.
 func scopedBytes(rec *artifact.Record, dependsOn []string) int {
 	total := 0
 	for _, frag := range rec.Fragments {
@@ -225,9 +242,4 @@ func scopedBytes(rec *artifact.Record, dependsOn []string) int {
 		}
 	}
 	return total
-}
-
-// tokensForChars converts a character count to an estimated token count.
-func tokensForChars(chars int) int {
-	return chars / charsPerToken
 }

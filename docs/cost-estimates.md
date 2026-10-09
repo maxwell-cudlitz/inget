@@ -13,6 +13,12 @@ fragment cache keys across items count once. The `upper_bound` label is retained
 for compatibility; tokenization, retries and embedding charges mean this is not a
 guaranteed ceiling on the provider bill.
 
+Fragment calls use `models.generator` prices and output limits. View calls use the
+optional `models.view_generator` role's prices and limits, falling back to the generator
+when omitted. The aggregate input/output fields sum both stages; the total cost prices
+each stage separately. Expected estimates validate and cap output means against the
+corresponding role's budget.
+
 An optional usage profile adds `estimate.expected`:
 
 ```sh
@@ -40,6 +46,15 @@ reprocessing every live item from a full-scope artifact, add
 limited pass does not acknowledge the new signature; the full rebuild must succeed
 before it is recorded. Profiles calibrated under the old prompts remain invalid and
 must be recalibrated before they can provide `estimate.expected` again.
+
+For a view rebuild without file-summary spending, combine the explicit rebuild flag
+with `--indexed-only --cached-fragments-only`. Planning checks the selected file cache
+before estimating; missing summaries fail before inference for that artifact pass.
+The current fragment signature is used unless an explicit historical fallback allowlist
+is supplied with `--cached-fragment-signatures`. Fallbacks still require exact fragment
+paths and fingerprints and contribute their actual cached output lengths. A successful
+cache-only plan reports zero fragment derivations. View generation and embedding charges
+remain; embedding costs are not included in the generation estimate.
 
 A profile is one JSON object, version 1, with exactly the configured view names:
 

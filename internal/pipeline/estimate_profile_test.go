@@ -43,7 +43,7 @@ func TestEstimateProfileValidation(t *testing.T) {
 			h := newCascadeHarness(t)
 			p := profileFor(h)
 			tc.change(p)
-			err := validateEstimateProfile(p, h.deps, h.runConfig().Pricing)
+			err := validateEstimateProfile(p, h.deps, h.runConfig())
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error=%v, want containing %s", err, tc.want)
 			}

@@ -68,7 +68,11 @@ func buildDeps(ctx context.Context, cfg *config.Config, dt config.Datatype, dryR
 		}
 	}
 
-	enrichers, err := buildViewEnrichers(cfg, gen, dt)
+	viewGen, err := buildViewGenerator(cfg)
+	if err != nil {
+		return fail(err)
+	}
+	enrichers, err := buildViewEnrichers(cfg, viewGen, dt)
 	if err != nil {
 		return fail(err)
 	}

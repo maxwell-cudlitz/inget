@@ -2048,3 +2048,25 @@ explicitly include every live item from a full-scope artifact. The planner accou
 that work; restricted or failed rebuilds do not record changed signatures. A resumed
 opt-in rebuild replaces its old queue so previously completed items are checked against
 the new signatures. The D2 design and CLI docs now match this opt-in behavior.
+
+## Detailed local repository views and cached-summary rebuilds, 2026-10-09
+
+The tracked local-comparison repository prompts now preserve distinctive details without
+fixed word or paragraph targets, with short, medium and long examples in each view.
+Search terms remain bounded at 32 short phrases. The fragment prompt is byte-identical.
+The local configuration separates view generation (1,792 output tokens, 500,000 input
+characters) from unchanged fragment generation (1,024 tokens and 4,000-character file
+prefixes), and expands composition to 437,500 characters. Reranking sees up to 6,000
+characters per candidate rather than 200. The Vertex bridge forwards complete embedding
+text with autoTruncate disabled and rejects reported truncation instead of silently
+embedding a prefix. The local helpers and environment settings remain ignored.
+
+The native optional `models.view_generator` role defaults to the shared generator when
+absent and has independent signatures, input validation and estimator pricing. It does
+not change the shared worker semaphore. `plan` and `run` accept `--indexed-only` and
+`--cached-fragments-only` for regenerating views from successful checkpoints without
+fragment-generation calls. Cache preflight covers the selected artifact pass, including
+resumed selection; runtime guards refuse a miss after preflight. Historical summaries
+can be explicitly permitted by `--cached-fragment-signatures`, matching the same path
+and fingerprint without rewriting cache provenance. Default signature rebuilding remains
+opt-in. These additions amend D2 and the model-role contract; no schema migration is needed.

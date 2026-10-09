@@ -24,16 +24,18 @@ import (
 func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig, runID string, result *reconcileResult, stats *statsCollector) (*Stats, error) {
 	cfg := deps.Config
 	ex := &execution{
-		deps:        deps,
-		arts:        arts,
-		runID:       runID,
-		gen:         newLimiter(rc.Concurrency),
-		derive:      &singleflight.Group{},
-		concurrency: max(rc.Concurrency, 1),
-		forceViews:  result.rebuild,
-		refDepth:    rc.MaxReferenceDepth,
-		changed:     result.changed,
-		stats:       stats,
+		deps:                     deps,
+		arts:                     arts,
+		runID:                    runID,
+		gen:                      newLimiter(rc.Concurrency),
+		derive:                   &singleflight.Group{},
+		concurrency:              max(rc.Concurrency, 1),
+		forceViews:               result.rebuild,
+		cacheOnly:                rc.CachedFragmentsOnly,
+		cachedFragmentSignatures: rc.CachedFragmentSignatures,
+		refDepth:                 rc.MaxReferenceDepth,
+		changed:                  result.changed,
+		stats:                    stats,
 	}
 	if cfg.FragmentEnricher && deps.FragEnricher != nil {
 		ex.fragSig = deps.FragEnricher.Signature()
@@ -69,7 +71,7 @@ func runWorkers(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConf
 			"datatype", cfg.Name, "rebuild_enabled", result.rebuild, "restricted", result.partial,
 			"failed_items", final.ItemsFailed)
 	} else {
-		recordSignatures(ctx, deps)
+		recordSignatures(ctx, deps, len(rc.CachedFragmentSignatures) > 0)
 	}
 	slog.InfoContext(ctx, "pipeline complete",
 		"datatype", cfg.Name, "status", status,
@@ -139,8 +141,11 @@ func completeFailed(ctx context.Context, ex *execution, itemID string, cause err
 
 // recordSignatures stores the signature of every enricher scope the run used, so the next
 // `inget plan` can report a prompt or model change before it is paid for (D2).
-func recordSignatures(ctx context.Context, deps Deps) {
+func recordSignatures(ctx context.Context, deps Deps, historicalFragments bool) {
 	for scope, sig := range currentSignatures(deps) {
+		if historicalFragments && scope == deps.Config.Name+":fragment" {
+			continue // historical cache reuse does not attest to producing current-signature summaries
+		}
 		if err := deps.State.PutSignature(ctx, scope, sig); err != nil {
 			slog.WarnContext(ctx, "recording enricher signature", "scope", scope, "error", err)
 		}

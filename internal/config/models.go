@@ -1,12 +1,31 @@
-// Model-role configuration. Query reranking has its own optional generation settings
-// so changing retrieval behaviour never changes indexing model signatures.
+// Model-role configuration. Optional view and query roles isolate their generation
+// budgets and signatures from per-fragment derivations.
 package config
 
-// Models holds generation, embedding and optional query reranking roles.
+import "reflect"
+
+// Models holds fragment generation, embedding and optional view/query generation roles.
 type Models struct {
-	Generator Generator `mapstructure:"generator"`
-	Embedder  Embedder  `mapstructure:"embedder"`
-	Reranker  Generator `mapstructure:"reranker"`
+	Generator             Generator `mapstructure:"generator"`
+	ViewGenerator         Generator `mapstructure:"view_generator"`
+	Embedder              Embedder  `mapstructure:"embedder"`
+	Reranker              Generator `mapstructure:"reranker"`
+	viewGeneratorDeclared bool
+}
+
+// HasViewGenerator reports whether a view role was declared, including an incomplete
+// declaration that validation must reject rather than silently inheriting the fragment role.
+func (m Models) HasViewGenerator() bool {
+	return m.viewGeneratorDeclared || !reflect.ValueOf(m.ViewGenerator).IsZero()
+}
+
+// EffectiveViewGenerator preserves the shared generator for configurations that omit
+// the optional role; a declared role supplies all settings rather than inheriting fields.
+func (m Models) EffectiveViewGenerator() Generator {
+	if m.HasViewGenerator() {
+		return m.ViewGenerator
+	}
+	return m.Generator
 }
 
 // ModelClient is the transport-level configuration shared by all model roles.
