@@ -4,8 +4,10 @@ package pipeline
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/maxwell-cudlitz/inget/internal/artifact"
 	"github.com/maxwell-cudlitz/inget/internal/state"
 )
 
@@ -241,5 +243,23 @@ func TestSignatureRebuildIsExplicit(t *testing.T) {
 	if len(cleanPlan.WorkItems) != 0 || len(cleanPlan.Estimate.ChangedSignatures) != 0 {
 		t.Errorf("post-rebuild plan work/signatures = %v / %v, want none",
 			cleanPlan.WorkItems, cleanPlan.Estimate.ChangedSignatures)
+	}
+}
+
+func TestSignatureRebuildRejectsPartialArtifact(t *testing.T) {
+	h := newCascadeHarness(t)
+	h.writeRun(baseVersion, noChange, "")
+	if _, _, err := h.run(); err != nil {
+		t.Fatalf("initial run: %v", err)
+	}
+	replaceViewPrompt(t, h, "role", "Generate role differently: {{.Document}}")
+	h.scope = artifact.ScopePartial
+	h.writeRun(baseVersion, noChange, "")
+
+	rc := h.runConfig()
+	rc.DryRun = true
+	rc.RebuildOnSignatureChange = true
+	if _, _, err := Run(h.ctx, h.deps, h.arts, rc); err == nil || !strings.Contains(err.Error(), "requires a full-scope artifact") {
+		t.Fatalf("partial artifact rebuild error = %v, want full-scope guard", err)
 	}
 }
