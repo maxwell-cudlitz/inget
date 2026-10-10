@@ -56,6 +56,10 @@ paths and fingerprints and contribute their actual cached output lengths. A succ
 cache-only plan reports zero fragment derivations. View generation and embedding charges
 remain; embedding costs are not included in the generation estimate.
 
+Cache-only plans also use actual cached summary lengths for the normal allowance, even
+without a measured profile, including composition headings and separators. Output is still
+priced at the full view budget, and tokenization remains approximate.
+
 A profile is one JSON object, version 1, with exactly the configured view names:
 
 ```json

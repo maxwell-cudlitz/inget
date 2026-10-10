@@ -2070,3 +2070,13 @@ resumed selection; runtime guards refuse a miss after preflight. Historical summ
 can be explicitly permitted by `--cached-fragment-signatures`, matching the same path
 and fingerprint without rewriting cache provenance. Default signature rebuilding remains
 opt-in. These additions amend D2 and the model-role contract; no schema migration is needed.
+
+Validation: `make build test lint` passed with the race detector and pinned golangci-lint
+(zero issues), and all 17 local bridge HTTP/auth tests passed against mocked Google
+responses. A native PostgreSQL plan used a read-only connection, the real local config
+and artifacts, and an explicit legacy fragment-signature fallback. It selected 425
+successful checkpoints, reported zero fragment derivations and 2,856 possible view
+generations, and priced the generation allowance at $33.6620385, excluding embeddings
+and retries. The organization ingestion was still active, so these counts describe the
+plan's snapshot. No paid model requests or index rebuild were started for this change;
+the active bridge was left running for that existing ingestion.

@@ -6,8 +6,8 @@
 // trying to price. So every view whose scope changed is counted as a generation even though
 // some of them will turn out to compose to an unchanged document, every call is priced at the
 // full output budget rather than the shorter completion it will probably return, and a view's
-// input is the raw size of the fragments in its scope even though what it composes is their
-// shorter derived text. Rendered prompt wrappers are included. Input is bounded by the
+// input uses raw fragment sizes unless cache-only mode supplies actual cached summary
+// lengths. Rendered prompt wrappers are included. Input is bounded by the
 // same fragment and composition truncation the run applies, because pricing
 // characters no call sends is not conservatism, it is a wrong number.
 package pipeline
