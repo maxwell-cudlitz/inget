@@ -47,29 +47,34 @@ func viewPromptChars(deps Deps, rec *artifact.Record, view config.View, fallback
 }
 
 func expectedFragment(ctx context.Context, deps Deps, p *EstimateProfile, frag artifact.Fragment,
-	frags fragEstimate, key string, cached bool, expected *ExpectedEstimate) error {
+	frags fragEstimate, key string, cached bool, pricing Pricing, expected *ExpectedEstimate) error {
 	if cached {
-		text, found, err := deps.State.PeekDerivation(ctx, key)
-		if err != nil {
-			return fmt.Errorf("sizing cached derivation for %s: %w", frag.Key, err)
-		}
-		if !found {
-			return fmt.Errorf("derivation cache changed while estimating fragment %s", frag.Key)
-		}
-		frags.chars[key] = float64(utf8.RuneCountInString(text))
-		return nil
+		chars, err := cachedFragmentChars(ctx, deps, frag, key)
+		frags.chars[key] = chars
+		return err
 	}
 	frags.chars[key] = p.Fragment.OutputChars
 	chars, err := fragmentPromptChars(deps, frag, frags.maxChars)
 	if err != nil {
 		return err
 	}
-	expected.add(*p.Fragment, float64(chars))
+	expected.add(*p.Fragment, float64(chars), pricing)
 	return nil
 }
 
+func cachedFragmentChars(ctx context.Context, deps Deps, frag artifact.Fragment, key string) (float64, error) {
+	text, found, err := deps.State.PeekDerivation(ctx, key)
+	if err != nil {
+		return 0, fmt.Errorf("sizing cached derivation for %s: %w", frag.Key, err)
+	}
+	if !found {
+		return 0, fmt.Errorf("derivation cache changed while estimating fragment %s", frag.Key)
+	}
+	return float64(utf8.RuneCountInString(text)), nil
+}
+
 func expectedView(deps Deps, p *EstimateProfile, rec *artifact.Record, view config.View,
-	frags fragEstimate, expected *ExpectedEstimate) error {
+	frags fragEstimate, pricing Pricing, expected *ExpectedEstimate) error {
 	stage := p.Views[view.Name]
 	chars := composedEstimateChars(rec, view.DependsOn, frags)
 	if chars == 0 {
@@ -82,7 +87,7 @@ func expectedView(deps Deps, p *EstimateProfile, rec *artifact.Record, view conf
 	if err != nil {
 		return err
 	}
-	expected.add(stage, chars+wrapper)
+	expected.add(stage, chars+wrapper, pricing)
 	return nil
 }
 

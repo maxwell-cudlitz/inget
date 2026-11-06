@@ -38,7 +38,7 @@ func buildViewEnrichers(cfg *config.Config, gen model.Generator, dt config.Datat
 				// prompt sees it; the output bound is the generator's, passed here so that
 				// generated text is length-checked before it is stored.
 				MaxInputChars:   composeMaxChars(dt),
-				MaxOutputTokens: cfg.Models.Generator.MaxOutputTokens,
+				MaxOutputTokens: cfg.Models.EffectiveViewGenerator().MaxOutputTokens,
 				SchemaVersion:   1,
 			})
 		case "passthrough":
@@ -93,8 +93,20 @@ func composeMaxChars(dt config.Datatype) int {
 
 // buildGenerator creates the Generator from config.
 func buildGenerator(cfg *config.Config) (model.Generator, error) {
-	mc := cfg.Models.Generator
-	apiKey, err := modelAPIKey(cfg, mc.APIKeyEnv, "generator")
+	return buildRoleGenerator(cfg, cfg.Models.Generator, "generator")
+}
+
+// buildViewGenerator isolates repository-view output budgets from fragment signatures.
+func buildViewGenerator(cfg *config.Config) (model.Generator, error) {
+	role := "generator"
+	if cfg.Models.HasViewGenerator() {
+		role = "view_generator"
+	}
+	return buildRoleGenerator(cfg, cfg.Models.EffectiveViewGenerator(), role)
+}
+
+func buildRoleGenerator(cfg *config.Config, mc config.Generator, role string) (model.Generator, error) {
+	apiKey, err := modelAPIKey(cfg, mc.APIKeyEnv, role)
 	if err != nil {
 		return nil, err
 	}

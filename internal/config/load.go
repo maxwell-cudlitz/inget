@@ -41,6 +41,13 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg, decoderOptions()...); err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", path, err)
 	}
+	cfg.Models.viewGeneratorDeclared = v.IsSet("models.view_generator")
+	for _, key := range EnvKeys() {
+		if strings.HasPrefix(key, "models.view_generator.") && v.IsSet(key) {
+			cfg.Models.viewGeneratorDeclared = true
+			break
+		}
+	}
 	normalize(&cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration in %s: %w", path, err)

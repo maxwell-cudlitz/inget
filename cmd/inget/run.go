@@ -26,6 +26,9 @@ type runOptions struct {
 	limit                    int
 	estimateProfile          string
 	rebuildOnSignatureChange bool
+	cachedFragmentsOnly      bool
+	indexedOnly              bool
+	cachedFragmentSignatures []string
 }
 
 // runCommand builds `inget run`.
@@ -49,11 +52,20 @@ func runCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "report the work and its estimated cost without doing it")
 	cmd.Flags().BoolVar(&opts.rebuildOnSignatureChange, "rebuild-on-signature-change", false,
 		"explicitly process every item when a prompt or enricher signature has changed")
+	cmd.Flags().BoolVar(&opts.cachedFragmentsOnly, "cached-fragments-only", false,
+		"require matching cached file summaries; refuse all fragment generation")
+	cmd.Flags().BoolVar(&opts.indexedOnly, "indexed-only", false,
+		"restrict processing to previously indexed items; intersect --only before --limit")
+	cmd.Flags().StringSliceVar(&opts.cachedFragmentSignatures, "cached-fragment-signatures", nil,
+		"ordered historical fragment signatures allowed with --cached-fragments-only; prefer the current signature")
 	return cmd
 }
 
 // execute resolves the datatypes named on the command line and runs each one.
 func execute(cmd *cobra.Command, args []string, opts runOptions) error {
+	if err := validateCachedFragmentOptions(cmd, opts); err != nil {
+		return err
+	}
 	cfg, err := config.Load(cli.ConfigPath(cmd))
 	if err != nil {
 		return fmt.Errorf("loading configuration: %w", err)
@@ -98,6 +110,7 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 	}
 
 	gen := cfg.Models.Generator
+	viewGen := cfg.Models.EffectiveViewGenerator()
 	rc := pipeline.RunConfig{
 		Binary:                   "inget",
 		Concurrency:              gen.Concurrency,
@@ -106,10 +119,18 @@ func runOneDatatype(ctx context.Context, cfg *config.Config, dt config.Datatype,
 		Only:                     opts.only,
 		Limit:                    opts.limit,
 		RebuildOnSignatureChange: opts.rebuildOnSignatureChange,
+		CachedFragmentsOnly:      opts.cachedFragmentsOnly,
+		IndexedOnly:              opts.indexedOnly,
+		CachedFragmentSignatures: opts.cachedFragmentSignatures,
 		Pricing: pipeline.Pricing{
 			PerMTokIn:       gen.PricePerMTokIn,
 			PerMTokOut:      gen.PricePerMTokOut,
 			MaxOutputTokens: gen.MaxOutputTokens,
+		},
+		ViewPricing: &pipeline.Pricing{
+			PerMTokIn:       viewGen.PricePerMTokIn,
+			PerMTokOut:      viewGen.PricePerMTokOut,
+			MaxOutputTokens: viewGen.MaxOutputTokens,
 		},
 		MaxReferenceDepth: cfg.Enrich.MaxReferenceDepth,
 		MaxCascadePerRun:  cfg.Enrich.MaxCascadePerRun,

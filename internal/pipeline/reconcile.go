@@ -175,12 +175,21 @@ func invalidatedItems(ctx context.Context, deps Deps, rc RunConfig, records map[
 	return taken, len(eligible) - len(taken), nil
 }
 
-// selectWork applies --only and --limit, reporting whether the result is a subset of what
+// selectWork applies --indexed-only, --only and --limit, reporting whether the result is a subset of what
 // changed. The candidates are sorted first so that --limit takes the same items every time:
 // a limited run that picked a different arbitrary subset on each invocation would make no
 // progress through a backlog.
 func selectWork(candidates []string, rc RunConfig) (work []string, partial bool) {
 	slices.Sort(candidates)
+	if rc.IndexedOnly {
+		filtered := make([]string, 0, len(candidates))
+		for _, id := range candidates {
+			if _, indexed := rc.indexedItems[id]; indexed {
+				filtered = append(filtered, id)
+			}
+		}
+		candidates, partial = filtered, true
+	}
 
 	if len(rc.Only) > 0 {
 		only := make(map[string]struct{}, len(rc.Only))

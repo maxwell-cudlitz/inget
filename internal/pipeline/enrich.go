@@ -67,7 +67,7 @@ func deriveFragment(ctx context.Context, ex *execution, itemID string, frag arti
 	}
 
 	cacheKey := delta.FragmentCacheKey(frag.Key, frag.Fingerprint, ex.fragSig)
-	cached, found, err := ex.deps.State.Derivation(ctx, cacheKey)
+	cached, found, err := readCachedFragment(ctx, ex, frag)
 	if err != nil {
 		return "", fmt.Errorf("reading the derivation cache for fragment %s: %w", frag.Key, err)
 	}
@@ -82,7 +82,7 @@ func deriveFragment(ctx context.Context, ex *execution, itemID string, frag arti
 	derived, err, _ := ex.derive.Do(cacheKey, func() (any, error) {
 		// The first miss may predate another worker's completed derivation. A completed
 		// singleflight call is forgotten, so recheck durable state before spending again.
-		cached, found, err := ex.deps.State.Derivation(ctx, cacheKey)
+		cached, found, err := readCachedFragment(ctx, ex, frag)
 		if err != nil {
 			return nil, fmt.Errorf("rechecking the derivation cache: %w", err)
 		}
@@ -103,6 +103,10 @@ func deriveFragment(ctx context.Context, ex *execution, itemID string, frag arti
 
 // generateDerivation reads a fragment's content, derives it, and caches the result.
 func generateDerivation(ctx context.Context, ex *execution, itemID string, frag artifact.Fragment, cacheKey string) (string, error) {
+	if ex.cacheOnly {
+		return "", fmt.Errorf("--cached-fragments-only: matching cached summary is missing for %s/%s fragment %s; fragment generation is disabled",
+			ex.deps.Config.Name, itemID, frag.Key)
+	}
 	cfg := ex.deps.Config
 	content, err := loadFragmentContent(ctx, ex.arts, frag)
 	if err != nil {

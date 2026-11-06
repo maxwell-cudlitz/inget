@@ -137,15 +137,19 @@ func (c *Config) validateComposeFits(v *validator, path string, d Datatype) {
 	if maxChars == 0 {
 		maxChars = DefaultComposeMaxChars
 	}
-	limit := c.Models.Generator.MaxInputChars
+	limit := c.Models.EffectiveViewGenerator().MaxInputChars
 	if limit <= 0 || maxChars <= 0 {
 		return // the missing bound is reported by its own check
 	}
 	margin := min(promptMarginChars, limit/marginFraction)
 	if maxChars+margin > limit {
-		v.failf("%s.compose.max_chars = %d leaves no room under models.generator.max_input_chars = %d "+
+		role := "models.generator"
+		if c.Models.HasViewGenerator() {
+			role = "models.view_generator"
+		}
+		v.failf("%s.compose.max_chars = %d leaves no room under %s.max_input_chars = %d "+
 			"for the prompt template around the document; keep it at or below %d",
-			path, maxChars, limit, limit-margin)
+			path, maxChars, role, limit, limit-margin)
 	}
 }
 

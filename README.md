@@ -325,6 +325,34 @@ inget run github/repo --rebuild-on-signature-change
 The plan prices the broader work before generation. A limited pass does not record the new
 signature, so the remaining work stays detectable for a later full rebuild.
 
+To regenerate repository views from existing file summaries, add `--cached-fragments-only`.
+It checks all selected fragment cache keys before each artifact pass and refuses missing
+summaries; it also disables fragment generation if a cache entry disappears during execution.
+`--indexed-only` restricts work to successfully checkpointed items, intersects `--only`, and
+applies before `--limit`:
+
+```bash
+inget plan github/repo --rebuild-on-signature-change --indexed-only --cached-fragments-only
+inget run github/repo --rebuild-on-signature-change --indexed-only --cached-fragments-only
+```
+
+These commands still pay for changed view generation and embeddings. They do not fetch
+repositories or summarize files. A missing matching cache entry stops the pass. If a previous
+file prompt was intentionally used, `--cached-fragment-signatures sha256:PREVIOUS_SIGNATURE`
+explicitly allows that historical signature as a fallback, only with `--cached-fragments-only`.
+The current signature is preferred; fallback keys must match the exact file path and
+fingerprint. Historical outputs retain their original cache keys and provenance. Restricted
+rebuilds do not acknowledge a global signature change.
+
+An optional complete `models.view_generator` block configures repository-view generation
+separately from `models.generator`, which continues to summarize fragments. Omit it to keep
+the existing shared-generator behavior. Give it the same fields as `models.generator`,
+including endpoint, model, request options, token limits and prices. Changing only the view
+role does not invalidate fragment derivations. Ingestion still uses the shared worker and
+request limit from `models.generator.concurrency`; `plan` prices each stage with its own
+role's input/output prices and output budget. Ensure view text fits the chosen embedder's
+input limit; a generous generator budget cannot enlarge an embedding model's context.
+
 **Storage grows.** `inget state gc` performs the three-phase collection: run directories past
 `retention.runs` except the latest committed one, blobs no retained run and no live fragment
 references, then the derivations of fragments missing for more than `retention.missing_runs`

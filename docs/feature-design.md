@@ -165,6 +165,20 @@ artifact; `inget plan` estimates that opt-in rebuild before it is run. The signa
 recorded only after an unrestricted rebuild succeeds, so a failed or limited pass remains
 detectable and can be retried.
 
+An opt-in `--indexed-only` selector restricts that widening to items with successful live
+checkpoints, before `--only` and `--limit`. Missing historical signature rows are also
+treated conservatively as unknown for an explicit rebuild of existing checkpoints.
+Default runs still do not widen work when a signature is changed or unknown.
+
+`--cached-fragments-only` preflights the selected artifact pass and disables fragment
+generation throughout execution. By default it requires the current exact level-1 key.
+An explicit `--cached-fragment-signatures` allowlist can fall back to older derivations
+with the same file path and fingerprint, in supplied order after the current signature.
+Those outputs are not relabeled or copied under the current signature, and a pass using
+the allowlist does not record the current fragment scope as globally rebuilt. The composed
+text continues to determine level-2 hashes. No migration or change to normal cache lookup
+semantics is involved.
+
 **Rationale.** This is the single most common failure in content-addressed pipelines.
 Keying a per-fragment summary on the git blob SHA alone omits the prompt and the model
 from the key, so editing the prompt or switching models leaves every cached summary
@@ -450,6 +464,15 @@ higher on both English and code retrieval. The published gap between top open we
 and hosted leaders (Gemini Embedding, Voyage) is 1–3 MTEB points, inside the range
 where leaderboard overfitting and domain mismatch dominate. The design therefore makes
 this measurable rather than assumed — see D14.
+
+`models.view_generator` is an optional complete Generator role for repository views.
+Without it, views use `models.generator` as before; fragments always use the latter.
+Each role contributes its own generation settings to its own enricher signatures and
+its own output budget and prices to planning. Composition/input validation uses the
+effective view generator. Worker concurrency and the shared request semaphore remain
+controlled by `models.generator.concurrency`. This permits richer repository views
+without invalidating already derived file summaries. View output must fit the configured
+embedder's input limit; transports must not silently index only a prefix of stored text.
 
 **Trade-offs.** A cold build of 4M vectors on CPU is on the order of a day; on a
 GPU-backed TEI it is 1–2 hours; at hosted rates (~$0.15/M tokens) roughly $155.

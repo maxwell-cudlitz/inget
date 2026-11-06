@@ -60,7 +60,11 @@ type RunConfig struct {
 	Only                     []string         // restrict the work set to these item IDs; empty means all
 	Limit                    int              // cap the work set; 0 means uncapped
 	RebuildOnSignatureChange bool             // opt in to processing every live item after an enricher signature change
+	CachedFragmentsOnly      bool             // require selected fragment summaries in cache before view generation
+	IndexedOnly              bool             // restrict selected work to items with successful persisted checkpoints
+	CachedFragmentSignatures []string         // explicit ordered historical cache signatures, usable only in cache-only mode
 	Pricing                  Pricing          // what plan mode multiplies its token estimate by
+	ViewPricing              *Pricing         // optional separate view role rates and output budget; nil uses Pricing
 	EstimateProfile          *EstimateProfile // optional measured stage model, used only by plan
 	// MaxReferenceDepth and MaxCascadePerRun bound the reference invalidation cascade
 	// (enrich.*, D12). They are run settings rather than datatype settings because a cascade
@@ -68,6 +72,7 @@ type RunConfig struct {
 	// processed by different runs.
 	MaxReferenceDepth int
 	MaxCascadePerRun  int
+	indexedItems      map[string]string // initial successful item fingerprints for --indexed-only; nil means no indexed items
 }
 
 // Pricing turns an estimated token count into money for plan mode. Zero prices report a
@@ -125,15 +130,17 @@ type Plan struct {
 // read, the run's identity, its generator budget and its counters. Stage functions take it
 // instead of six parameters each.
 type execution struct {
-	deps        Deps
-	arts        *artifact.Store
-	runID       string
-	gen         *limiter            // shared bound on concurrent generator calls
-	derive      *singleflight.Group // collapses concurrent derivations of one fragment
-	concurrency int                 // goroutines per fan-out stage
-	fragSig     string              // fragment enricher signature; "" when disabled
-	forceViews  bool                // bypass level-1 view skips for an opted-in signature rebuild
-	refDepth    int                 // enrich.max_reference_depth; bounds the cascade
+	deps                     Deps
+	arts                     *artifact.Store
+	runID                    string
+	gen                      *limiter            // shared bound on concurrent generator calls
+	derive                   *singleflight.Group // collapses concurrent derivations of one fragment
+	concurrency              int                 // goroutines per fan-out stage
+	fragSig                  string              // fragment enricher signature; "" when disabled
+	forceViews               bool                // bypass level-1 view skips for an opted-in signature rebuild
+	cacheOnly                bool                // refuse fragment generation, including after preflight cache eviction
+	cachedFragmentSignatures []string            // explicit historical cache signatures; current signature is always preferred
+	refDepth                 int                 // enrich.max_reference_depth; bounds the cascade
 	// changed is the items this run picked up because their own content moved, as opposed to
 	// the ones a reference invalidated. It decides whether processing an item cascades: an
 	// item that republished nothing has nothing to tell its referrers.

@@ -28,6 +28,12 @@ func Run(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig) (*P
 	ingestInitial(ctx, cfg.Name, rc.DryRun)
 	slog.InfoContext(ctx, "pipeline starting",
 		"datatype", cfg.Name, "concurrency", rc.Concurrency, "dry_run", rc.DryRun)
+	if err := validateCachedFragmentSignatures(rc); err != nil {
+		return nil, nil, err
+	}
+	if err := loadIndexedSelection(ctx, deps, &rc); err != nil {
+		return nil, nil, err
+	}
 
 	pending, err := pendingRuns(ctx, deps, arts)
 	if err != nil {
@@ -162,6 +168,11 @@ func planOnly(ctx context.Context, deps Deps, arts *artifact.Store, rc RunConfig
 	if err := surfaceSignatureChanges(ctx, deps, rc, result); err != nil {
 		return nil, err
 	}
+	if rc.CachedFragmentsOnly {
+		if err := preflightCachedFragments(ctx, deps, result, rc.CachedFragmentSignatures); err != nil {
+			return nil, err
+		}
+	}
 	if !rc.DryRun {
 		return result, nil
 	}
@@ -188,11 +199,12 @@ func resolveRun(ctx context.Context, deps Deps, rc RunConfig, result *reconcileR
 		if reset > 0 {
 			slog.InfoContext(ctx, "reset abandoned claims", "count", reset)
 		}
-		if result.rebuild {
-			// An explicit signature rebuild must revisit items completed under the previous
-			// prompt or model, including after an interrupted rebuild.
+		if result.rebuild || rc.CachedFragmentsOnly || rc.IndexedOnly {
+			// A signature rebuild revisits completed work under the new signature. A cache-only
+			// or indexed-only pass must claim exactly its current selected work,
+			// rather than inheriting unselected items from an interrupted invocation.
 			if err := deps.State.ReplaceWork(ctx, existing, cfg.Name, result.plan.WorkItems); err != nil {
-				return "", false, fmt.Errorf("replacing work for signature rebuild %s: %w", existing, err)
+				return "", false, fmt.Errorf("replacing selected work for run %s: %w", existing, err)
 			}
 			return existing, true, nil
 		}
@@ -229,29 +241,4 @@ func resolveRun(ctx context.Context, deps Deps, rc RunConfig, result *reconcileR
 	}
 	slog.InfoContext(ctx, "started new run", "run_id", runID, "work_items", len(result.plan.WorkItems))
 	return runID, false, nil
-}
-
-// processTombstones deletes tombstoned items from state and destinations.
-func processTombstones(ctx context.Context, deps Deps, tombstones []string, stats *statsCollector) error {
-	if len(tombstones) == 0 {
-		return nil
-	}
-	slog.InfoContext(ctx, "processing tombstones", "count", len(tombstones))
-
-	if err := deps.State.Tombstone(ctx, deps.Config.Name, tombstones); err != nil {
-		return fmt.Errorf("tombstoning items: %w", err)
-	}
-	for _, destName := range deps.Config.Destinations {
-		dest, ok := deps.Destinations[destName]
-		if !ok {
-			return fmt.Errorf("destination %q not found in deps", destName)
-		}
-		for _, itemID := range tombstones {
-			if err := dest.DeleteItem(ctx, deps.Config.Name, itemID); err != nil {
-				return fmt.Errorf("deleting %s from %s: %w", itemID, destName, err)
-			}
-		}
-	}
-	stats.addTombstones(len(tombstones))
-	return nil
 }
