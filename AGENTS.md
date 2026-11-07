@@ -193,7 +193,8 @@ A release is a tag: `git tag -a vX.Y.Z -m 'vX.Y.Z' && git push origin vX.Y.Z`.
   `config.yaml` and `prompts/`, plus `checksums.txt`;
 - one multi-arch image, `ghcr.io/maxwell-cudlitz/inget`, tagged `vX.Y.Z`, `vX.Y` and — only
   for a non-prerelease — `latest`;
-- the Homebrew cask in `maxwell-cudlitz/homebrew-tap`.
+- optionally, the Homebrew cask in `maxwell-cudlitz/homebrew-tap` when repository variable
+  `PUBLISH_HOMEBREW_CASK=true`.
 
 Validate a change to the pipeline with `make release-check`, and prove it with
 `make release-snapshot`, which needs docker with buildx and writes everything to `dist/`
@@ -201,15 +202,23 @@ without pushing. Snapshot mode cannot build a manifest without pushing, so it pr
 per-architecture tags (`…-amd64`, `…-arm64`) instead of one multi-arch tag; that difference is
 goreleaser's, not this configuration's.
 
-Three preconditions, none of which the repository can satisfy on its own:
+Release prerequisites:
 
-- **`HOMEBREW_TAP_TOKEN`** must be a secret holding a PAT with `contents:write` on the tap. A
-  workflow's `GITHUB_TOKEN` is scoped to this repository and cannot push to another. If it is
-  missing the release fails at the cask step, *after* the binaries and image are published —
-  set the secret and re-run the job rather than re-tagging.
-- **The tap repository must exist.** goreleaser commits into it; it does not create it.
+- **Homebrew upload defaults to disabled.** An unset `PUBLISH_HOMEBREW_CASK` repository
+  variable is `false`; only literal `true` and `false` are accepted. Default archive and
+  GHCR image publication do not require a tap or cross-repository PAT.
+- **Opt-in Homebrew publication needs the tap and credential first.** Before setting
+  `PUBLISH_HOMEBREW_CASK=true`, create `maxwell-cudlitz/homebrew-tap` and configure repository
+  secret `HOMEBREW_TAP_TOKEN` with push access (`contents:write`) there. The workflow rejects
+  a missing credential or missing push permission before publishing anything. Its normal
+  `GITHUB_TOKEN` is scoped to this repository and cannot update another repository. A
+  prerelease does not upload the cask even when this option is enabled.
 - **`deploy/kubernetes/` pins an image tag** (`v0.1.0`). Manifests and releases are versioned
   separately, so a tag bump has to reach them or a CronJob pulls something that is not there.
+
+The tag workflow provisions the same disposable pgvector fixture as normal CI and runs
+PostgreSQL state, destination and restricted-role query tests. Live-model quality tests
+remain separately gated; no cloud credentials or private corpus are used for this gate.
 
 The module path, the GitHub owner and the image namespace all read `maxwell-cudlitz`, and they
 are three independent strings that have to move together: the module path lives in `go.mod`,

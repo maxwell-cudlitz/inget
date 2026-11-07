@@ -1,17 +1,13 @@
-# Release on tag: test, then build and publish binaries, the image and the Homebrew cask.
+# Release on tag: test, then build and publish binaries and the multi-arch image.
 #
-# The test job repeats what ci.yaml already ran on main, because a tag can be pushed at any
-# commit and a release is the one build nobody can take back. It needs no credentials: the
-# suites that need PostgreSQL or a live model are gated on their own variables and stay
-# skipped, exactly as in CI.
+# The test job repeats the PostgreSQL/pgvector integration coverage from ci.yaml because
+# a tag can be pushed at any commit. It uses only a disposable database and synthetic
+# model responses. Live-model quality cases remain opt-in.
 #
-# Secrets and permissions:
-#   GITHUB_TOKEN       contents:write for the release, packages:write for ghcr.io.
-#   HOMEBREW_TAP_TOKEN a PAT with contents:write on maxwell-cudlitz/homebrew-tap. A workflow
-#                      token is scoped to this repository, so it cannot push the cask. If the
-#                      secret is absent the release fails at the cask step, after the
-#                      binaries and the image are already published — rerun with the secret
-#                      set rather than re-tagging.
+# GITHUB_TOKEN has contents:write for release assets and packages:write for GHCR.
+# Homebrew upload is opt-in through repository variable PUBLISH_HOMEBREW_CASK=true.
+# It requires HOMEBREW_TAP_TOKEN with push access to an existing homebrew-tap repository;
+# validate that prerequisite before publishing any archives or images.
 name: release
 
 on:
@@ -30,12 +26,34 @@ jobs:
   test:
     name: vet and test
     runs-on: ubuntu-latest
+    services:
+      pgvector:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: inget_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d inget_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Disposable service credentials, never an application secret.
+      INGET_TEST_PG: postgres://postgres:fixture-only@127.0.0.1:5432/inget_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - name: Prepare pgvector extension
+        run: >-
+          docker exec "${{ job.services.pgvector.id }}"
+          psql -U postgres -d inget_test -v ON_ERROR_STOP=1
+          -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - run: go vet ./...
       - run: go test -race ./...
 
@@ -46,6 +64,9 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      # An unset repository variable keeps archives/image independent of a tap token.
+      PUBLISH_HOMEBREW_CASK: ${{ vars.PUBLISH_HOMEBREW_CASK || 'false' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,6 +77,31 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Validate optional Homebrew publication
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          case "$PUBLISH_HOMEBREW_CASK" in
+            false) exit 0 ;;
+            true) ;;
+            *)
+              echo "::error::PUBLISH_HOMEBREW_CASK must be true or false"
+              exit 1
+              ;;
+          esac
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Homebrew publication requires HOMEBREW_TAP_TOKEN"
+            exit 1
+          fi
+          if ! can_push=$(gh api repos/maxwell-cudlitz/homebrew-tap --jq '.permissions.push // false'); then
+            echo "::error::Cannot verify access to maxwell-cudlitz/homebrew-tap"
+            exit 1
+          fi
+          if [ "$can_push" != true ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN needs push access to maxwell-cudlitz/homebrew-tap"
+            exit 1
+          fi
 
       # No QEMU: the Dockerfile only copies pre-built binaries, so nothing is executed for
       # the target platform and a cross-platform build needs no emulation. Adding a RUN

@@ -143,10 +143,10 @@ homebrew_casks:
       name: homebrew-tap
       # A workflow's GITHUB_TOKEN is scoped to this repository, so pushing the cask to the
       # tap needs a separate token with contents:write there.
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    # A prerelease must not move the tap: `brew upgrade` would hand every user a release
-    # candidate.
-    skip_upload: auto
+      token: '{{ index .Env "HOMEBREW_TAP_TOKEN" }}'
+    # Homebrew is opt-in. Without the repository variable and tap credentials, releases
+    # still publish archives and the image. Enabled prereleases never move the tap.
+    skip_upload: '{{ if eq (index .Env "PUBLISH_HOMEBREW_CASK") "true" }}auto{{ else }}true{{ end }}'
     # These binaries are not signed or notarized — Apple charges yearly for that — so macOS
     # quarantines them and reports "inget is damaged and cannot be opened" on first run.
     # Clearing the attribute at install time is the documented alternative. It bypasses
@@ -178,9 +178,10 @@ release:
     ## Install
 
     ```bash
-    brew install maxwell-cudlitz/tap/inget
     docker pull ghcr.io/maxwell-cudlitz/inget:{{ .Tag }}
     ```
 
     The archives carry both binaries plus `config.yaml` and `prompts/`, which are read from
     disk rather than embedded.
+
+    Homebrew publication is optional; see the repository's release instructions.
