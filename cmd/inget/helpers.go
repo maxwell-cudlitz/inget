@@ -130,6 +130,13 @@ func buildEmbedder(cfg *config.Config) (model.Embedder, error) {
 	if err != nil {
 		return nil, err
 	}
+	return configuredEmbedder(cfg, apiKey), nil
+}
+
+// configuredEmbedder constructs the configured identity without resolving credentials or
+// contacting the provider. query-check uses an empty key because it never embeds text.
+func configuredEmbedder(cfg *config.Config, apiKey string) model.Embedder {
+	mc := cfg.Models.Embedder
 	return model.NewEmbedder(model.OpenAIEmbedderConfig{
 		BaseURL:      mc.BaseURL,
 		Model:        mc.Model,
@@ -138,7 +145,7 @@ func buildEmbedder(cfg *config.Config) (model.Embedder, error) {
 		TruncateDims: mc.TruncateDims,
 		BatchSize:    mc.BatchSize,
 		Timeout:      mc.Timeout.Duration(),
-	}), nil
+	})
 }
 
 // modelAPIKey resolves a model client's credential.

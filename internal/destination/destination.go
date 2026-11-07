@@ -47,6 +47,12 @@ type Destination interface {
 	// mixing vector spaces.
 	AssertModel(ctx context.Context, model string, dims int, signature string) error
 
+	// ValidateModel checks an existing binding, pgvector version, physical vector shape
+	// and the columns needed by Search using reads alone. It never creates a binding,
+	// migrates a schema or authorizes writes on this handle. Query-only callers must use
+	// this instead of AssertModel and need SELECT privileges only.
+	ValidateModel(ctx context.Context, model string, dims int, signature string) error
+
 	// RebindModel replaces the binding and reports whether it changed. It is the one thing
 	// AssertModel refuses to do, and `inget reindex` is the only caller: a destination whose
 	// embedder changed accepts no write at all until the registry is rebound, so rebinding is

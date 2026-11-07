@@ -1,7 +1,7 @@
 # Implementation Progress
 
 Handoff record for the one-step-per-session cadence. A session should be able to orient
-from this file plus the named design line ranges, without reading all 1353 lines of
+from this file plus the named design line ranges, without reading the whole
 `feature-design.md`.
 
 ## Session protocol
@@ -43,24 +43,25 @@ roughly 18 sessions rather than 14. Steps 1–8 need no network and no credentia
 
 | Step | Sections | Lines |
 |---|---|---|
-| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1370–1405, 1349–1369, 596–640 |
-| 2 | Configuration, D2 (hashing) | 808–1003, 157–180 |
-| 3 | `artifact-envelope.md` in full, D5, D6 | all, 261–300 |
-| 4 | State schema, D13 | 643–744, 532–554 |
-| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–260, 1276–1303 |
-| 6 | D10, API/Interface | 371–458, 1004–1166 |
-| 7 | D7, D8, D9, Destination schema | 301–370, 745–807 |
-| 8 | D11, Enrichment Pipeline, Edge Cases | 459–491, 1276–1327 |
-| 9 | `github/repo`, D6, Security considerations | 1207–1228, 283–300, 1328–1348 |
-| 10 | `monday/item` | 1229–1275 |
-| 11 | D12 | 492–531 |
-| 12 | D14, Testing Strategy | 555–595, 1406–1429 |
-| 13 | Edge Cases, `artifact-envelope.md` GC | 1304–1327, 263–275 |
-| 14 | Non-Goals, Repository Layout | 1430–1441, 1370–1405 |
+| 1 | Architecture, Repository Layout, Observability, D15 | 51–118, 1406–1441, 1385–1405, 631–675 |
+| 2 | Configuration, D2 (hashing) | 843–1038, 157–200 |
+| 3 | `artifact-envelope.md` in full, D5, D6 | all, 281–320 |
+| 4 | State schema, D13 | 678–779, 567–589 |
+| 5 | D1, D2, D3, D4, Enrichment Pipeline | 121–280, 1312–1339 |
+| 6 | D10, API/Interface | 397–493, 1039–1240 |
+| 7 | D7, D8, D9, Destination schema | 321–396, 780–842 |
+| 8 | D11, Enrichment Pipeline, Edge Cases | 494–526, 1312–1339, 1340–1384 |
+| 9 | `github/repo`, D6, Security considerations | 1243–1264, 303–320, 1364–1384 |
+| 10 | `monday/item` | 1265–1311 |
+| 11 | D12 | 527–566 |
+| 12 | D14, Testing Strategy | 590–630, 1442–1465 |
+| 13 | Edge Cases, `artifact-envelope.md` GC | 1340–1384, 263–275 |
+| 14 | Non-Goals, Repository Layout | 1466–1477, 1406–1441 |
+| MCP 1 | D7, Read-only query preflight | 321–340, 1527–1565 |
 
-These offsets are valid for `feature-design.md` at 1488 lines. Editing that file shifts
+These offsets are valid for `feature-design.md` at 1565 lines. Editing that file shifts
 everything below the edit, so regenerate the map with
-`grep -n '^#\{2,3\} ' docs/feature-design.md` whenever the design changes.
+`rg -n '^#{2,3} ' docs/feature-design.md` whenever the design changes.
 
 ## Step 1 record
 
@@ -2080,3 +2081,34 @@ generations, and priced the generation allowance at $33.6620385, excluding embed
 and retries. The organization ingestion was still active, so these counts describe the
 plan's snapshot. No paid model requests or index rebuild were started for this change;
 the active bridge was left running for that existing ingestion.
+
+
+## MCP package 1: SELECT-only query and preflight, 2026-11-06
+
+Implemented the upstream query contract required by the separate MCP deployment plan.
+Query startup now validates existing destination schema and model bindings through
+SELECT-only `ValidateModel`, before embedding text. It does not call writer `AssertModel`,
+create missing bindings, or grant write privileges. Writer initialization/reindex retain
+their existing responsibilities; read validation does not establish a writer binding.
+
+The new `query-check` command validates strict configuration, pgvector version, actual
+storage/width, registry identity and required read access, using the query's datatype,
+destination and optional view selection. Its JSON output contains validated profile
+metadata only. It opens no state/artifact stores, sends no model requests, and requires
+no unused model/source secret values. README and the design extension record exact reader
+grants, supported identifiers/search_path, DSN pool tuning and the fixed caller shape.
+
+The test workflow now supplies a disposable pgvector service through `INGET_TEST_PG`, so
+PostgreSQL state/destination and restricted-role CLI integration cases run in CI. Model
+responses stay synthetic and no cloud credentials or private corpus fixtures are used.
+
+Validation: `make build test lint` and `make release-check` passed, with the race detector,
+pinned golangci-lint v2.12.2 (zero issues), and GoReleaser v2.17.1. The full race suite
+used a separate PostgreSQL 17.11 / pgvector 0.8.7 container through `INGET_TEST_PG`, so
+the destination, PostgreSQL state and restricted-role CLI suites ran. The CLI suite and
+linter passed again after adding shared-destination and later-invalid-view coverage.
+actionlint v1.7.12 and Git whitespace checks passed. Independent source review found
+no outstanding correctness issues. Live-model quality tests remain optional and were
+not run; all new model responses are synthetic. CI now executes the database suites;
+its run status is recorded on the review PR. No upstream release, MCP runtime, GCP
+resource deployment, or database migration is part of this package.

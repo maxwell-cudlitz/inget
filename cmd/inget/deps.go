@@ -137,9 +137,10 @@ func openDestination(ctx context.Context, cfg *config.Config, name string, emb m
 
 // openDestinationUnbound opens a destination without asserting the model binding.
 //
-// Only `inget reindex` uses it, and only because AssertModel is what it exists to get past: a
+// Reindex uses it because AssertModel is what it exists to get past: a
 // destination whose embedder changed refuses every write until the registry is rebound, so the
-// one command allowed to rebind cannot be required to assert first.
+// one command allowed to rebind cannot be required to assert first. Queries use it before
+// SELECT-only validation, so their credentials never need permission to create a binding.
 func openDestinationUnbound(ctx context.Context, cfg *config.Config, name string) (destination.Destination, error) {
 	opts, err := destination.FromConfig(cfg, name)
 	if err != nil {
@@ -148,6 +149,19 @@ func openDestinationUnbound(ctx context.Context, cfg *config.Config, name string
 	sink, err := destination.Open(ctx, opts)
 	if err != nil {
 		return nil, err
+	}
+	return sink, nil
+}
+
+// openQueryDestination checks an existing schema and binding without creating either.
+func openQueryDestination(ctx context.Context, cfg *config.Config, name string, emb model.Embedder) (destination.Destination, error) {
+	sink, err := openDestinationUnbound(ctx, cfg, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := sink.ValidateModel(ctx, emb.Model(), emb.Dims(), emb.Signature()); err != nil {
+		_ = sink.Close()
+		return nil, fmt.Errorf("validating query destination %s: %w", name, err)
 	}
 	return sink, nil
 }

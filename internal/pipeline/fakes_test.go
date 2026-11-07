@@ -80,7 +80,8 @@ type testDest struct {
 func (d *testDest) Migrate(context.Context) error { return nil }
 func (d *testDest) Close() error                  { return nil }
 
-func (d *testDest) AssertModel(context.Context, string, int, string) error { return nil }
+func (d *testDest) AssertModel(context.Context, string, int, string) error   { return nil }
+func (d *testDest) ValidateModel(context.Context, string, int, string) error { return nil }
 
 func (d *testDest) RebindModel(context.Context, string, int, string) (bool, error) {
 	return false, nil

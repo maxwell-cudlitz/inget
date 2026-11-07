@@ -66,6 +66,7 @@ inget plan [datatype]    # what a run would do, and what it would cost
 inget run  [datatype]    # enrich, embed, upsert
 inget eval [datatype]    # score retrieval quality against the thresholds
 inget query "<text>"     # search the index and print the hits
+inget query-check        # validate existing query schema, binding and read access
 inget reindex [datatype] # re-embed stored views after an embedder change
 inget state show|gc|unlock
 
@@ -232,6 +233,67 @@ The query is embedded by the configured embedder, and every destination is check
 that embedder before it is searched. Searching an index built by another model returns
 rankings that look ordinary and mean nothing, so that check is a refusal rather than a
 warning.
+
+`query` and `query-check` use SELECT-only validation of the existing model binding. `query` validates
+all selected destinations before embedding text; it never creates a registry row. A missing
+binding requires an operator to initialize the index through the writer path. A disagreement
+requires the documented `inget reindex` operation rather than broader query privileges.
+
+Use `query-check` for readiness without contacting a model provider:
+
+```bash
+inget query-check --datatype github/repo --json
+inget query-check --datatype github/repo --destination vectors --view stack
+inget query --datatype github/repo --limit 5 --json --rerank=false -- "--text from a caller"
+```
+
+`query-check` loads the full strict configuration, verifies pgvector >= 0.8.0, the actual
+embedding column's storage type and width, the existing model/dimensions/signature binding,
+and read access to the columns used by search. It selects the same first destination per
+datatype as `query`, unless `--destination` names another configured destination for that
+datatype. `--view` verifies a declared view, not whether rows for it exist. The preflight
+opens no state or artifact store, resolves no model/source credentials, and sends no text to
+an embedder or generator. It needs only the selected destination DSNs. Missing unused
+secret values are allowed; malformed or unknown configuration fields still fail.
+
+On success, `--json` writes an array of `{datatype, destination, table, storage, model, dims,
+signature}` profiles. Any selected destination failing validation exits nonzero without a
+partial success report. This checks database structure and read access, not model endpoint
+availability, corpus completeness, or retrieval quality.
+
+The serving database role needs `CONNECT` on the database, `USAGE` on the selected schema,
+and `SELECT` on the destination table and `inget_model_registry`. It needs no registry
+`INSERT`, schema/table creation, migration-version-table access, or state-table privileges.
+The owner grants privileges; query startup does not. For example, after creating the role
+and migrating/seeding the index through the writer:
+
+```sql
+GRANT CONNECT ON DATABASE inget TO inget_reader;
+GRANT USAGE ON SCHEMA public TO inget_reader;
+GRANT SELECT ON public.inget_vectors, public.inget_model_registry TO inget_reader;
+ALTER ROLE inget_reader SET default_transaction_read_only = on;
+```
+
+Keep the reader separate from owner/writer roles and their inherited grants. A read-only
+transaction default is additional protection; the SELECT-only grants enforce denied writes
+even when a session changes that default. Search uses transaction-local HNSW settings and
+works with `default_transaction_read_only=on`.
+
+Destination table names must be valid unquoted PostgreSQL identifiers matching
+`[a-z_][a-z0-9_]*`, at most 63 bytes. Reserved keywords, quoted, mixed-case, and
+schema-qualified names are unsupported. Both table and registry resolve
+through the connection's PostgreSQL `search_path`; use an owner-controlled schema and set
+that path in the DSN when needed. pgx pool options also belong in the DSN, for example
+`pool_max_conns=1`, not invented YAML pool settings. Query/preflight support a one-connection
+pool without holding a cursor while acquiring a second connection. See the upstream
+[pgx pool DSN options](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool#ParseConfig) and
+[PostgreSQL read-only defaults](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-DEFAULT-TRANSACTION-READ-ONLY).
+
+The database integration tests use `INGET_TEST_PG` pointing to a disposable pgvector
+PostgreSQL database. They create distinct owner/writer/SELECT-only roles, so the fixture
+connection needs `CREATE ROLE` and authority to grant the fixture objects. Never use the
+application's live database for this suite. CI provisions its own pgvector service and
+runs these tests along with the PostgreSQL state tests; model calls remain synthetic.
 
 Optional LLM reranking uses the same OpenAI-compatible `/chat/completions` client as
 generation. It is disabled by default. Configure a separate model role and enable it:
