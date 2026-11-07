@@ -2112,3 +2112,25 @@ no outstanding correctness issues. Live-model quality tests remain optional and 
 not run; all new model responses are synthetic. CI now executes the database suites;
 its run status is recorded on the review PR. No upstream release, MCP runtime, GCP
 resource deployment, or database migration is part of this package.
+
+
+## MCP package 2: release prerequisites, 2026-11-06
+
+Release preparation found that the tag workflow skipped the database integration suites
+now exercised by normal CI, and stable publication unconditionally depended on a separate
+Homebrew tap and token. The existing ignored snapshot output also predates the query
+contract and cannot establish current artifact identity.
+
+The tag test job now provisions the same disposable pgvector fixture as normal CI and
+runs the PostgreSQL state, destination and restricted-role query suites. Homebrew upload
+is explicitly opt-in through repository variable `PUBLISH_HOMEBREW_CASK` (default `false`).
+When enabled, preflight requires the tap token and verifies push access to the existing
+tap before any archive/image publication. Invalid option values fail before publication.
+Default release archives and GHCR images do not need a tap token. README and this agent
+guide describe the distribution choice and retain the release/snapshot distinction.
+
+Validation and fresh snapshot evidence are retained with the release-prerequisite review
+PR. Package 2 is not complete until a real release
+and approved Harbor admission are verified and their immutable digests, binary checksums
+and compatibility profile are recorded in the MCP repository. No release tag, publication,
+registry admission, runtime deployment or migration is claimed by this preparation record.

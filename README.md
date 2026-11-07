@@ -24,7 +24,7 @@ iterate on prompts against artifacts you already have — no re-fetching, no rat
 
 ## Install
 
-Homebrew, on macOS:
+Optional Homebrew installation on macOS, when cask publication is enabled:
 
 ```bash
 brew install maxwell-cudlitz/tap/inget
@@ -610,10 +610,11 @@ one, and it needs no database and no credentials.
 
 ### Releasing
 
-A release is a tag. `.github/workflows/release.yaml` runs the suite, then goreleaser builds
-static binaries for linux and darwin on amd64 and arm64, publishes the archives and
-`checksums.txt`, pushes one multi-arch image to `ghcr.io/maxwell-cudlitz/inget`, and updates
-the Homebrew cask in `maxwell-cudlitz/homebrew-tap`.
+A release is a tag. `.github/workflows/release.yaml` runs vet and the race suite against a
+disposable pgvector database, including PostgreSQL state and restricted-role query tests.
+GoReleaser then builds static binaries for linux and darwin on amd64 and arm64, publishes
+the archives and `checksums.txt`, and pushes one multi-arch image to
+`ghcr.io/maxwell-cudlitz/inget`. These default artifacts need no Homebrew tap token.
 
 ```bash
 make release-install    # install the pinned goreleaser (v2.17.1)
@@ -622,12 +623,20 @@ make release-snapshot   # build every artifact into dist/, publish nothing
 git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
 ```
 
-Nothing is built inside the Dockerfile — goreleaser has already cross-compiled, so the image
-copies the same binaries the archives contain. Two things the pipeline needs that the
-repository cannot provide: a `HOMEBREW_TAP_TOKEN` secret with write access to the tap, since a
-workflow token cannot reach another repository, and an existing tap repository for the cask to
-land in. Prereleases (`v0.1.0-rc.1`) publish binaries and the image but deliberately do not
-move `latest` or the cask.
+Nothing is built inside the Dockerfile — GoReleaser has already cross-compiled, so the
+image copies the same binaries the archives contain. Snapshot images use per-architecture
+tags rather than publishing a multi-arch manifest; validate the actual release's manifest
+and platform digests before pinning them.
+
+Homebrew upload is opt-in. Set the repository variable `PUBLISH_HOMEBREW_CASK` to the literal
+`true` to enable it; an unset variable defaults to `false`, and other values fail validation.
+Enabling upload also requires an existing `maxwell-cudlitz/homebrew-tap` repository and a
+`HOMEBREW_TAP_TOKEN` repository secret with push access (`contents:write`) there. The release
+workflow checks that token's repository push permission before publishing archives or
+images. Its normal `GITHUB_TOKEN` is scoped to this repository and cannot update another
+tap. Keep publication disabled until the tap and credential are ready. Prereleases
+(`v0.1.0-rc.1`) publish binaries and the image but do not move `latest` or the cask, even
+when cask publication is enabled.
 
 ## Security notes
 
