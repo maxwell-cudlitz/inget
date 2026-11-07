@@ -5,7 +5,7 @@
 // rather than a psql session with a hand-written vector literal, and so that an operator comparing
 // two prompt sets can see the hits rather than the scores alone.
 //
-// The query is embedded by the configured embedder and every destination is asserted against that
+// The query is embedded by the configured embedder and every destination is validated against that
 // embedder first (D7): a query vector from one model searched against another model's index returns
 // rankings that look ordinary and mean nothing, which is the one failure mode this command must not
 // have.
@@ -117,14 +117,20 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	if err != nil {
 		return err
 	}
+	sinks, closeSinks, err := prepareQueryDestinations(cmd.Context(), cfg, emb, datatypes, opts)
+	if err != nil {
+		return err
+	}
+	defer closeSinks()
 	vector, err := embedQuery(cmd.Context(), emb, text)
 	if err != nil {
 		return err
 	}
 
-	var hits []hit
+	hits := make([]hit, 0)
 	for _, dt := range datatypes {
-		found, err := searchDatatype(cmd.Context(), cfg, emb, dt, vector, searchOpts)
+		name, _ := queryDestination(dt, opts.destination) // checked before embedding
+		found, err := searchDatatype(cmd.Context(), sinks[name], dt, vector, searchOpts)
 		if err != nil {
 			return err
 		}
@@ -160,22 +166,8 @@ func embedQuery(ctx context.Context, emb model.Embedder, text string) ([]float32
 }
 
 // searchDatatype searches one datatype's destination.
-func searchDatatype(ctx context.Context, cfg *config.Config, emb model.Embedder,
+func searchDatatype(ctx context.Context, sink destination.Destination,
 	dt config.Datatype, vector []float32, opts queryOptions) ([]hit, error) {
-	name, err := queryDestination(dt, opts.destination)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkQueryView(dt, opts.view); err != nil {
-		return nil, err
-	}
-
-	sink, err := openDestination(ctx, cfg, name, emb)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = sink.Close() }()
-
 	results, err := sink.Search(ctx, destination.SearchQuery{
 		Embedding: vector,
 		Datatype:  dt.Name,

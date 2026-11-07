@@ -43,9 +43,10 @@ type fakeDest struct {
 	bulkCall int
 }
 
-func (d *fakeDest) Migrate(context.Context) error                          { return nil }
-func (d *fakeDest) Close() error                                           { return nil }
-func (d *fakeDest) AssertModel(context.Context, string, int, string) error { return nil }
+func (d *fakeDest) Migrate(context.Context) error                            { return nil }
+func (d *fakeDest) Close() error                                             { return nil }
+func (d *fakeDest) AssertModel(context.Context, string, int, string) error   { return nil }
+func (d *fakeDest) ValidateModel(context.Context, string, int, string) error { return nil }
 
 func (d *fakeDest) RebindModel(context.Context, string, int, string) (bool, error) {
 	d.mu.Lock()

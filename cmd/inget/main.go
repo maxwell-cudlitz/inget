@@ -22,6 +22,7 @@ func main() {
 		evalCommand(),
 		reindexCommand(),
 		queryCommand(),
+		queryCheckCommand(),
 		stateCommand(),
 	)
 }

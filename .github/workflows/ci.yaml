@@ -1,9 +1,9 @@
 # Continuous integration: vet, lint and test on every push and pull request.
 #
-# Steps 1-8 of the implementation plan require no network access and no credentials, so
-# this workflow runs the full suite without secrets. Integration tests that need
-# Postgres or a live model are gated behind their own environment variables and stay
-# skipped here.
+# A disposable pgvector service exercises the PostgreSQL state, destination and
+# restricted-role query suites. The fixture administrator creates test-only roles;
+# no application database, cloud credentials or private corpus is used. Live-model
+# quality cases remain gated behind their own environment variable.
 name: ci
 
 on:
@@ -18,12 +18,34 @@ jobs:
   test:
     name: vet and test
     runs-on: ubuntu-latest
+    services:
+      pgvector:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: inget_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d inget_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Disposable service credentials, never an application secret.
+      INGET_TEST_PG: postgres://postgres:fixture-only@127.0.0.1:5432/inget_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - name: Prepare pgvector extension
+        run: >-
+          docker exec "${{ job.services.pgvector.id }}"
+          psql -U postgres -d inget_test -v ON_ERROR_STOP=1
+          -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - name: Verify formatting
         run: |
           unformatted=$(gofmt -l .)

@@ -332,6 +332,12 @@ incrementally and verify completion.
 **Trade-offs.** Changing embedding model requires a full reindex of the destination.
 Made explicit and scriptable rather than accidental.
 
+Query validation is SELECT-only: it compares the existing registry binding and actual
+embedding column shape without creating or rebinding anything. Missing bindings fail with
+operator guidance. Only writer initialization and explicit reindex may establish/change a
+binding; a read validation does not authorize subsequent writes. The read-only preflight
+extension below defines `query-check` and the serving-role contract.
+
 ### D8. 1024 dimensions and `halfvec` storage
 
 **Decision.** Pin the vector contract at 1024 dimensions stored as
@@ -1220,6 +1226,7 @@ inget migrate [--destination NAME] create/upgrade state and destination schemas
 inget reindex [--datatype] [--views] [--destination]
 inget state show | gc | unlock
 inget query "text" [--datatype] [--view] [-k N]    verification only
+inget query-check [--datatype] [--destination] [--view] [--json]  SELECT-only readiness
 inget eval [--datatype] [--embedder ...]           quality harness (D14)
 inget version
 ```
@@ -1515,3 +1522,44 @@ cancellation leave an honest final display, and the command closes its refresh g
 The existing pinned pure-Go `mattn/go-isatty` v0.0.23 and `golang.org/x/sys` v0.47.0 dependencies
 are promoted to direct use for terminal detection and dimensions, extending D15 for this
 optional display. Rendering, events, synchronization and timing use the standard library.
+
+
+## Read-only query preflight extension, 2026-11-06
+
+`inget query` and `inget query-check` use a SELECT-only destination validation path.
+It checks strict configuration, pgvector >= 0.8.0, actual embedding column storage/width,
+the existing model/dimensions/signature registry triple, and read access to every column
+used by search. A missing or mismatched binding is an error with an operator remedy;
+neither command creates schema, inserts registry rows, or rebinds a model. The query
+validates its selected destinations before sending text to the embedder. Writer
+`AssertModel` and reindex `RebindModel` retain their existing write responsibilities.
+
+`query-check` accepts `--datatype`, `--destination`, `--view`, and `--json`. Selection
+matches `query`: the first configured destination of each datatype unless explicitly
+named, with declared-view validation. Success JSON is an array of profiles containing
+`datatype`, `destination`, `table`, `storage`, `model`, `dims`, and `signature`; any failure
+exits nonzero before emitting a partial success report. No stored text or credential
+appears in the report. This is a structural/read-access preflight, not an endpoint health
+check or corpus-quality assertion.
+
+Preflight resolves only selected destination DSNs. It does not embed, resolve model or
+source credentials, or open state/artifact stores; full strict configuration loading
+still rejects unknown or malformed fields. The query reader requires database CONNECT,
+schema USAGE, and SELECT on its destination and `inget_model_registry`, without registry
+INSERT, schema creation, migration-version-table or state access. Read-only transaction
+defaults are supported alongside the existing transaction-local HNSW settings; grants
+remain the write boundary.
+
+Table identifiers remain unquoted plain lowercase names matching `[a-z_][a-z0-9_]*`, at
+most 63 bytes, resolved with the registry through the DSN's owner-controlled search_path.
+Pool tuning is passed through pgx DSN parameters, including `pool_max_conns=1`; no YAML
+pool configuration is added. Validation closes each read before acquiring another pool
+connection, so a one-connection pool is supported.
+
+Tests must use real pgvector with separate fixture owner, writer, and SELECT-only roles,
+including read-only transaction defaults, a one-connection pool, denied writes, missing
+and mismatched bindings, schema/storage mismatches, empty/nonempty results, and the
+bounded caller form with `--rerank=false` and `--` before user text. The disposable
+`INGET_TEST_PG` fixture administrator needs authority to create roles and grant objects;
+these tests must not run against the live corpus. CI runs the database suites using a
+throwaway pgvector service, without cloud or model credentials.
