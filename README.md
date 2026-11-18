@@ -67,6 +67,7 @@ inget run  [datatype]    # enrich, embed, upsert
 inget eval [datatype]    # score retrieval quality against the thresholds
 inget query "<text>"     # search the index and print the hits
 inget query-check        # validate existing query schema, binding and read access
+inget query-features     # describe optional query flags without config/network access
 inget reindex [datatype] # re-embed stored views after an embedder change
 inget state show|gc|unlock
 
@@ -110,6 +111,46 @@ disappears silently.
 For a worked version of the above against real data — 50 popular but reasonably sized public
 repositories, chosen with the GitHub search API, then queried both through `inget query` and
 through `curl` plus `psql` — see [`docs/local-walkthrough.md`](docs/local-walkthrough.md).
+
+### Item-level query results
+
+`query` remains generic over configured datatypes and their declared view names.
+The default JSON output stays a view-hit array. To return distinct items while
+retaining evidence from their matching views, opt into grouping:
+
+```bash
+inget query "deployment workflow" --datatype github/repo \
+  --views role,operations --group-by item --candidate-limit 140 \
+  --limit 5 --max-output-bytes 102400 --json --rerank=false
+inget query-features --json
+```
+
+Choose view names declared by the selected datatypes. `--view` selects one view;
+`--views` selects distinct focused views and is mutually exclusive with it.
+Without either flag, each datatype uses one native all-view lookup. Selected
+views reuse one query embedding across the entire command. Grouping uses
+`(datatype, item_id)`, so records from different sources never collide merely
+because their item IDs match. No LLM reranker is required; an explicit
+`--rerank=false` still overrides an enabled configuration.
+
+`--candidate-limit` is a global budget of 1–1000 view rows across all selected
+datatype/view lookups. Zero selects a bounded automatic budget for grouped or
+selected-view queries. The grouped JSON envelope reports candidates examined,
+the budget, whether a scope reached its allocation, requested/returned item
+counts, and `output_truncated`. Results retain the best native vector hit plus
+`matched_views` and an `evidence` list. A reached candidate limit means further
+matches may exist; fewer returned items do not prove absence.
+
+`--max-output-bytes` optionally bounds grouped JSON, including its newline.
+It first drops lower-priority secondary evidence or tail items and marks that
+loss explicitly. `matched_views` describes retrieved views; `evidence_truncated`
+identifies a shortened evidence list. If the first representative cannot fit,
+the command fails before writing output. This flag requires `--group-by item`
+and `--json`; it never changes the default ungrouped output contract.
+
+`query-features --json` is configuration-free and network-free, allowing a
+consumer to require `item_grouping`, `selected_views` and
+`bounded_grouped_output` before invoking these optional flags.
 
 ### Terminal progress
 

@@ -1563,3 +1563,45 @@ bounded caller form with `--rerank=false` and `--` before user text. The disposa
 `INGET_TEST_PG` fixture administrator needs authority to create roles and grant objects;
 these tests must not run against the live corpus. CI runs the database suites using a
 throwaway pgvector service, without cloud or model credentials.
+
+
+## Generic grouped query extension (2026-11-17)
+
+The native CLI owns view selection and item grouping for every configured datatype.
+These operations are independent of the source connector and of optional LLM
+reranking. `--views` accepts distinct datatype-declared view names and is mutually
+exclusive with existing `--view`; all selected names must exist in every selected
+datatype before model credentials, destination access or embedding are required.
+With neither flag, each datatype retains one all-view search. A selected-view
+command embeds its text once and reuses that vector for its bounded view lookups.
+No connector-specific names, repository assumptions or alternate model profile
+are introduced by this mechanism.
+
+`--group-by item` groups by `(datatype, item_id)`. The representative is the
+highest vector-scored hit; deterministic ties use datatype/item and view names.
+`matched_views` and per-view `evidence` retain contributing view text and scores.
+Repeated hits for the same item/view collapse to the strongest one. The existing
+reranker can optionally order grouped items while retaining this evidence;
+`--rerank=false` remains authoritative. Ungrouped JSON retains its original array.
+Grouped JSON is an explicit envelope with `results`, `candidate_count`,
+`candidate_limit`, `candidate_limit_reached`, `requested_limit`, `returned_items`
+and `output_truncated`.
+
+New grouped/selected-view queries have a global candidate budget, distributed
+across datatype/view scopes. `--candidate-limit` accepts 1–1000; zero chooses an
+automatic budget from the requested retrieval pool and selected/declared view
+count, clamped before multiplication. A budget below the result limit or scope
+count fails before embedding. Reaching any scope allocation sets
+`candidate_limit_reached`; the result is bounded retrieval, not an exhaustive
+existence check. Existing default view-level queries keep their original limits.
+
+Optional grouped-only `--max-output-bytes` requires JSON and bounds the actual
+serialized envelope plus newline. Dropped tail items or secondary evidence set
+`output_truncated`; shortened evidence lists also set `evidence_truncated` while
+`matched_views` retains retrieved-view identity. An unfit first representative
+fails without partial stdout. No implicit truncation of source text is introduced.
+
+`query-features --json` bypasses configuration/log initialization and performs no
+credential access, store access or network request. Its versioned feature report
+allows a separate MCP to detect this native contract before enabling it. This is
+CLI functionality, not a new HTTP service, ingestion mode or authorization path.

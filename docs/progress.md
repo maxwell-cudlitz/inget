@@ -2134,3 +2134,24 @@ PR. Package 2 is not complete until a real release
 and approved Harbor admission are verified and their immutable digests, binary checksums
 and compatibility profile are recorded in the MCP repository. No release tag, publication,
 registry admission, runtime deployment or migration is claimed by this preparation record.
+
+
+## Generic item grouping and selected-view retrieval — 2026-11-17
+
+The user requested distinct repository candidates and verifiable source evidence,
+then clarified that retrieval belongs in the native application with the same
+view mechanism for future data sources. This work implements the native query
+portion: generic `--group-by item`, `--views`, global `--candidate-limit`, bounded
+grouped JSON, and network/configuration-free `query-features` discovery. One
+embedding is reused across every selected datatype/view lookup. Group identity
+includes datatype and item ID; per-view evidence is retained independently of
+optional LLM reranking. Existing ungrouped defaults and explicit rerank overrides
+remain compatible. The feature-design extension records the new CLI contract.
+
+Validation is recorded in the implementation PR after build, race tests, vet and
+pinned lint. Deterministic cases cover generic datatype collisions, selection
+validation, global allocation, legacy output and byte budgets. The actual CLI
+fixture adds two views/two datatypes under the existing SELECT-only role, with a
+synthetic HTTP provider asserting exactly one embedding request; PostgreSQL
+acceptance requires `INGET_TEST_PG`. No ingestion, migration, user credential,
+embedding profile, publication or cloud runtime change is performed here.

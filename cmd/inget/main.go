@@ -23,6 +23,7 @@ func main() {
 		reindexCommand(),
 		queryCommand(),
 		queryCheckCommand(),
+		queryFeaturesCommand(),
 		stateCommand(),
 	)
 }
