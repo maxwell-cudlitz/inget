@@ -35,13 +35,17 @@ const snippetChars = 160
 
 // queryOptions are the command's flags.
 type queryOptions struct {
-	datatype    string
-	view        string
-	destination string
-	limit       int
-	efSearch    int
-	asJSON      bool
-	rerank      bool
+	datatype       string
+	view           string
+	views          []string
+	destination    string
+	limit          int
+	efSearch       int
+	asJSON         bool
+	rerank         bool
+	groupBy        string
+	candidateLimit int
+	maxOutputBytes int
 }
 
 // queryCommand builds `inget query`.
@@ -58,29 +62,25 @@ func queryCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("views") && len(opts.views) == 0 {
+				return fmt.Errorf("--views must contain at least one declared view name")
+			}
 			return runQuery(cmd, args[0], opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.datatype, "datatype", "", "restrict the search to one datatype")
 	cmd.Flags().StringVar(&opts.view, "view", "", "restrict the search to one view")
+	cmd.Flags().StringSliceVar(&opts.views, "views", nil, "search these declared views with one query embedding")
+	cmd.MarkFlagsMutuallyExclusive("view", "views")
 	cmd.Flags().StringVar(&opts.destination, "destination", "", "search this destination instead of the first configured one")
 	cmd.Flags().IntVar(&opts.limit, "limit", defaultQueryLimit, "how many hits to return")
 	cmd.Flags().IntVar(&opts.efSearch, "ef-search", 0, "override the destination's hnsw.ef_search")
 	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "write the hits as JSON")
 	cmd.Flags().BoolVar(&opts.rerank, "rerank", false, "override query.rerank.enabled; group items and rank with the chat model")
+	cmd.Flags().StringVar(&opts.groupBy, "group-by", "", "group matching views by item (supported: item)")
+	cmd.Flags().IntVar(&opts.candidateLimit, "candidate-limit", 0, "global view-candidate budget, 1-1000; 0 selects an automatic budget")
+	cmd.Flags().IntVar(&opts.maxOutputBytes, "max-output-bytes", 0, "bound grouped JSON bytes with explicit truncation; 0 is unrestricted")
 	return cmd
-}
-
-// hit is one search result plus the datatype it came from, which a merged search needs and
-// destination.SearchResult does not carry.
-type hit struct {
-	Datatype string            `json:"datatype"`
-	ItemID   string            `json:"item_id"`
-	ViewName string            `json:"view"`
-	Score    float64           `json:"score"`
-	Text     string            `json:"text"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-	Rank     int               `json:"rank,omitempty"` // only present after successful LLM ranking; score stays vector similarity
 }
 
 // runQuery embeds the query and searches every datatype in scope.
@@ -103,6 +103,9 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	if opts.limit <= 0 {
 		return fmt.Errorf("--limit is %d, want 1 or more", opts.limit)
 	}
+	if err := validateQuerySelection(datatypes, opts); err != nil {
+		return err
+	}
 
 	ranker, err := prepareQueryRanker(cmd, cfg, opts)
 	if err != nil {
@@ -111,6 +114,10 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	searchOpts := opts
 	if ranker != nil {
 		searchOpts.limit = max(opts.limit, cfg.Query.Rerank.Candidates)
+	}
+	plan, err := makeQueryPlan(datatypes, opts, searchOpts.limit)
+	if err != nil {
+		return err
 	}
 
 	emb, err := buildEmbedder(cfg)
@@ -128,16 +135,23 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	}
 
 	hits := make([]hit, 0)
-	for _, dt := range datatypes {
+	for _, scope := range plan.scopes {
+		dt := scope.datatype
 		name, _ := queryDestination(dt, opts.destination) // checked before embedding
+		searchOpts.view, searchOpts.limit = scope.view, scope.limit
 		found, err := searchDatatype(cmd.Context(), sinks[name], dt, vector, searchOpts)
 		if err != nil {
 			return err
 		}
+		plan.limitReached = plan.limitReached || len(found) == scope.limit
 		hits = append(hits, found...)
 	}
+	candidateCount := len(hits)
 	// Merged across datatypes, so the ordering the destination gave us no longer holds.
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	if opts.groupBy == "item" {
+		hits = groupQueryEvidence(hits)
+	}
 	hits, err = finishQueryHits(cmd.Context(), text, hits, opts.limit, cfg.Query.Rerank.Candidates,
 		ranker, cfg.Models.Reranker.Timeout.Duration())
 	if err != nil {
@@ -147,6 +161,11 @@ func runQuery(cmd *cobra.Command, text string, opts queryOptions) error {
 	slog.InfoContext(cmd.Context(), "query complete", "datatypes", len(datatypes),
 		"embedder", emb.Model(), "dims", emb.Dims(), "hits", len(hits))
 	if opts.asJSON {
+		if opts.groupBy == "item" {
+			return printGroupedQuery(cmd.OutOrStdout(), groupedQueryOutput{Results: hits, CandidateCount: candidateCount,
+				CandidateLimit: plan.candidateLimit, CandidateLimitReached: plan.limitReached,
+				RequestedLimit: opts.limit, ReturnedItems: len(hits)}, opts.maxOutputBytes)
+		}
 		return printJSON(hits)
 	}
 	printHits(hits)

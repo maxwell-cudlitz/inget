@@ -33,11 +33,18 @@ func queryCheckCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "query-check", Short: "Validate query configuration and destination read access without embedding",
 		Args: cobra.NoArgs, SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, _ []string) error { return runQueryCheck(cmd, opts) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("views") && len(opts.views) == 0 {
+				return fmt.Errorf("--views must contain at least one declared view name")
+			}
+			return runQueryCheck(cmd, opts)
+		},
 	}
 	cmd.Flags().StringVar(&opts.datatype, "datatype", "", "check one datatype instead of every configured datatype")
 	cmd.Flags().StringVar(&opts.destination, "destination", "", "check this destination instead of the first configured one")
 	cmd.Flags().StringVar(&opts.view, "view", "", "check that the selected datatypes declare this view")
+	cmd.Flags().StringSliceVar(&opts.views, "views", nil, "check that the selected datatypes declare these views")
+	cmd.MarkFlagsMutuallyExclusive("view", "views")
 	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "write validated profiles as JSON")
 	return cmd
 }
@@ -54,6 +61,9 @@ func runQueryCheck(cmd *cobra.Command, opts queryOptions) error {
 	}
 	datatypes, err := selectDatatypes(cfg, args)
 	if err != nil {
+		return err
+	}
+	if err := validateQueryViews(datatypes, opts); err != nil {
 		return err
 	}
 	emb := configuredEmbedder(cfg, "")
@@ -88,6 +98,9 @@ func runQueryCheck(cmd *cobra.Command, opts queryOptions) error {
 // A shared destination opens once, and all pools are closed on success or partial failure.
 func prepareQueryDestinations(ctx context.Context, cfg *config.Config, emb model.Embedder,
 	datatypes []config.Datatype, opts queryOptions) (map[string]destination.Destination, func(), error) {
+	if err := validateQueryViews(datatypes, opts); err != nil {
+		return nil, func() {}, err
+	}
 	sinks := make(map[string]destination.Destination)
 	closeSinks := func() {
 		for _, sink := range sinks {
